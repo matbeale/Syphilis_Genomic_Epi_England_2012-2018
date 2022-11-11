@@ -1,0 +1,2514 @@
+---
+title: "R Notebook - Treponema UK UKHSA-cohort Analysis 2022"
+output:
+  pdf_document: default
+  html_notebook: default
+  word_document: default
+---
+
+Make a clean environment
+```{r}
+ rm(list=ls())
+```
+\
+Load packages
+```{r}
+packages.list <- c("ggplot2","treeio","ggtree","ggnewscale","ape","dplyr","tidyverse","tidyr","phytools","RColorBrewer","lubridate","readxl","ggforce","ggstance","ggridges","cowplot","hexbin","scales","haven","network","ggnetwork","intergraph","igraph","ggraph","graphlayouts","scatterpie","maps","mapdata","maptools","rgdal","rgeos","broom","ggrepel","ggridges","magick","ggbeeswarm")
+
+#"plyr","Cairo","ggmap","emojifont","rPinecone","pairsnp","CoordinateCleaner","gridExtra","dendextend","ggdendro",
+
+#BiocManager::install("ggtree")
+#BiocManager::install("treeio")
+
+for(pkg in packages.list){
+  eval(bquote(library(.(pkg)))) }
+```
+\
+Confirm current environmental setup
+```{r}
+R.Version()
+print(sessionInfo())
+```
+\
+Make some shortcuts for plotting 
+```{r}
+y.theme.strip <- theme(axis.title.y = element_blank(), axis.text.y = element_blank(), axis.ticks.y= element_blank())
+y.theme.strip.partial <- theme(axis.text.y = element_blank(), axis.ticks.y= element_blank())
+
+x.theme.strip <- theme(axis.title.x = element_blank(), axis.text.x = element_blank(), axis.ticks.x= element_blank())
+x.theme.strip.partial <- theme(axis.text.x = element_blank(), axis.ticks.x= element_blank())
+x.theme.strip.labs <- theme(axis.text.x = element_blank(),axis.title.x = element_blank())
+
+x.theme.axis.rotate <- theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+
+legend.strip <- theme(legend.position = "none")
+
+theme.text.size <- theme(text = element_text(size = 10))
+
+'%notin%' <- Negate('%in%')
+
+max.font.size <- 7
+basic.font.size <- 6
+min.font.size <- 5.25
+theme.text.size <- theme(text = element_text(size = basic.font.size))
+theme.text.size.within <- (5/14)*min.font.size
+panel.lab.size <- 10
+
+```
+\
+Specify raw data - global dataset
+```{r}
+#Data_input_directory <- "/Users/mb29/Papers/Treponema_UK-PHE-gen-epi_2021/Data/"
+#Data_input_directory <- "/Users/mb29/Papers/Treponema_UK-PHE-gen-epi_2021/Rnotebook/Rnotebook_09-2022/data/"
+Data_input_directory <- paste0(getwd(), "/inputdata/")
+
+
+################################
+#### Tree data 
+
+# ML tree (refined dataset)
+TPA.MLtree.file <- paste0(Data_input_directory,"TPA-uber.remasked.2020-11-10.goodcov25.gubbins.SNPs.aln.renamed.fix-zero-dist.treefile")
+
+# Pyjar tree (refined dataset)
+TPA.pyjar.file <- paste0(Data_input_directory,"TPA-uber.remasked.2020-11-10.goodcov25.gubbins.SNPs.aln.renamed.pyjar.tre")
+
+# Full size BEAST2 analysis - previously generated as part of Beale, 2021.
+full.beast2.tree.file <- paste0(Data_input_directory,"TPA-uber_beast2_strict-skyline-500M_10pop_consensus.tree")
+
+
+################################
+#### Meta data 
+
+# Supplement from TPA-Uber paper - Beale, 2021 
+TPA.meta2.file <- paste0(Data_input_directory,"Sup_Data1_Global_Sample-Metadata__09-2022.xlsx")
+
+# England specific metadata collated by PHE/UKHSA
+PHE.metadata.linked.file <- paste0(Data_input_directory,"Sup_Data2_TPA.UK-only.PHE.metadata.2022-02-02.xlsx")
+
+# England specific mapping shapefile data with Public Health Boundaries
+# Imported datafile from https://geoportal.statistics.gov.uk/datasets/public-health-england-centres-december-2016-full-clipped-boundaries-in-england/explore?location=52.950000%2C-2.000000%2C6.88
+UK.publichealth.shapefile.data <- paste0(Data_input_directory,"Public_Health_England_Centres_(December_2016)_Boundaries")
+
+
+################################
+#### Externally plotted figures (e.g. GrapeTree) for inclusion in multipanel figures
+
+# Externally plotted grapetree minimum spanning tree for whole of England - code to extract subtree that was used to make this is included later in this Rnotebook
+TPA.UK.Grapetree.sublineages.file <- paste0(Data_input_directory,"TPA-UK-2022-02-03.sublineage-MSTree.Inkscaped.svg")
+
+# Externally plotted grapetree minimum spanning tree for whole of England - 3-variable plots
+TPA.UK.Grapetree.3way.file <- paste0(Data_input_directory,"TPA-UK-2022-02-16.-MSTree_3-way-figure.Inscaped-3.svg")
+
+# Externally plotted grapetree minimum spanning tree for whole of England - HIV status
+TPA.UK.Grapetree.HIV.file <- paste0(Data_input_directory,"TPA-UK-2022-02-03.HIVstatus-MSTree_inkscaped.svg")
+
+# Externally plotted grapetree minimum spanning tree for North East England networks
+TPA.NorthEastEngland.Grapetree.file <- paste0(Data_input_directory,"TPA-UK-NorthEast-2022-02-26.GenderOrientation-MSTree.inkscaped.+node-counts+GBMSM.svg")
+
+
+```
+\
+Specify directory to output plots
+```{r}
+Figure_output_directory <- paste0(getwd(), "/Figures/")
+
+#"/Users/mb29/Papers/Treponema_UK-PHE-gen-epi_2021/Figures/Figure_Drafting/Working_Figures_08-2022/"
+```
+\
+Read in trees
+```{r}
+TPA.MLtree <- midpoint.root(read.tree(TPA.MLtree.file))
+TPA.pyjar.tree <- midpoint.root(read.tree(TPA.pyjar.file))
+```
+\
+Read in final output metadata from Global Uber study (Beale 2021)
+```{r}
+TPA.meta2.1 <- readxl::read_excel(TPA.meta2.file,sheet="Supplementary_Data1_Sample-Meta")
+```
+\
+Create a colour scheme for Lineages, Countries and Continents (consistent with Beale, 2021)
+```{r}
+# Colouring for country
+continental.country.cols.brew2 <- unique(TPA.meta2.1[,c("Geo_Country","Continent")])
+continental.country.cols.brew2 <- continental.country.cols.brew2[order(continental.country.cols.brew2$Continent,continental.country.cols.brew2$Geo_Country),]
+
+continental.country.cols.brew2$country.col <- c("#ec7014","#fec44f","#de2d26","#fb6a4a","#bdbdbd","#737373",brewer.pal(n=8,"Purples")[4:8],brewer.pal(n=8,"Blues")[3:8],brewer.pal(n=5,"Greens")[3:5],"#c51b8a","#8c510a")
+
+# Colouring for Continent
+continental.cols.brew2 <- data.frame(Continent=sort(unique(TPA.meta2.1$Continent)),stringsAsFactors=F)
+continental.cols.brew2$continent.col <- c("#fec44f","#de2d26","#bdbdbd","#2171b5","#74c476","#c51b8a","#ec7014")
+
+
+# Colouring for TPA Lineage
+TPA_Lineage.cols <- data.frame(Lineage=sort(unique(TPA.meta2.1$TPA_Lineage)),stringsAsFactors=F)
+TPA_Lineage.cols$Lineage.col <- c("royalblue2", "indianred1")
+#c("#436eee", "#666666","#ff6a6a")
+TPA_Lineage.cols$Lineage <- factor(TPA_Lineage.cols$Lineage, levels=c("Nichols","SS14","outlier"))
+
+# Lineage Hexcodes
+# royalblue2 #436eee
+# indianred1 #ff6a6a
+```
+\
+Define colours for sublineages
+```{r}
+# Define sublineage clustering scheme using brew colourscales
+sublineages.cols.brew <- data.frame(unique(TPA.meta2.1[,c("TPA_Lineage","TPA.pinecone.sublineage")]), stringsAsFactors = F)
+sublineages.cols.brew <- sublineages.cols.brew[order(sublineages.cols.brew$TPA_Lineage,sublineages.cols.brew$TPA.pinecone.sublineage),]
+
+sublineages.cols.brew$sublin.order <- as.numeric(as.character(sublineages.cols.brew$TPA.pinecone.sublineage))
+sublineages.cols.brew <- sublineages.cols.brew[order(sublineages.cols.brew$sublin.order),]
+
+# For revised bootstrapped clusters
+sublineages.cols.brew$sublineage.cols <- c("#FC9272","#EF3B2C",brewer.pal(n=4,"Greens")[2:4],brewer.pal(n=4,"YlOrBr")[c(2,3)],brewer.pal(n=6,"Blues")[2:6],brewer.pal(n=6,"Purples")[2:6],"grey80","grey80","grey80","grey80")
+  
+sublineages.cols.brew <- unique(sublineages.cols.brew[,c("TPA.pinecone.sublineage","sublineage.cols")])
+sublineages.cols.brew <- sublineages.cols.brew[order(as.numeric(as.character(sublineages.cols.brew$TPA.pinecone.sublineage))),]
+sublineages.cols.brew$TPA.pinecone.sublineage <- factor(sublineages.cols.brew$TPA.pinecone.sublineage, levels=sublineages.cols.brew$TPA.pinecone.sublineage)
+sublineages.cols.brew <- sublineages.cols.brew[!is.na(sublineages.cols.brew$sublineage),]
+
+colnames(sublineages.cols.brew) <- c("sublineage","sublineage.cols")
+sublineages.cols.brew <- unique(sublineages.cols.brew)
+```
+\
+Restrict analysis to high quality genomes (and tree)
+```{r}
+TPA.meta2.1 <- TPA.meta2.1[TPA.meta2.1$finescale.analysis=="Yes",]
+```
+\
+Create a "UK" variable, and a "PHE" variable
+```{r}
+TPA.meta2.1$is.UK <- ifelse(TPA.meta2.1$Geo_Country=="UK","UK","Other")
+TPA.meta2.1$is.PHE <- ifelse(TPA.meta2.1$Geo_Country=="UK" & grepl("PHE",TPA.meta2.1$Sample_Name),"PHE","Other")
+```
+\
+```{r}
+# Prepare ML tree
+TPA.MLtree.ggtree <- ggtree(TPA.MLtree,layout = "fan",open.angle = 10, right=T)
+
+# Prepare country dataset
+TPA.rawseq.countries.p <- data.frame(row.names=TPA.meta2.1$Sample_Name, Country=TPA.meta2.1$Geo_Country, stringsAsFactors = F)
+
+# Prepare continent dataset
+TPA.rawseq.continents.p <- data.frame(row.names=TPA.meta2.1$Sample_Name, Continent=TPA.meta2.1$Continent, stringsAsFactors = F)
+
+# Prepare UK data strip
+TPA.rawseq.UK.p <- data.frame(row.names=TPA.meta2.1$Sample_Name, England=TPA.meta2.1$is.UK, stringsAsFactors = F)
+TPA.rawseq.UK.p[TPA.rawseq.UK.p$England=="UK",] <- "England"
+
+# Prepare PHE data strip
+TPA.rawseq.PHE.p <- data.frame(row.names=TPA.meta2.1$Sample_Name, PHE=TPA.meta2.1$is.PHE, stringsAsFactors = F)
+
+# Prepare Major lineage dataset
+TPA.rawseq.Lineage.p <- data.frame(row.names=TPA.meta2.1$Sample_Name, Lineage=TPA.meta2.1$TPA_Lineage, stringsAsFactors = F)
+
+# Prepare sublineage lineage dataset
+TPA.rawseq.subLineage.p <- data.frame(row.names=TPA.meta2.1$Sample_Name, Sublineage=TPA.meta2.1$TPA.pinecone.sublineage, stringsAsFactors = F)
+
+
+# Prepare Year dataset (all samples)
+TPA.rawseq.all.Years.p <- data.frame(row.names=TPA.meta2.1$Sample_Name, Year=TPA.meta2.1$Sample_Year, stringsAsFactors = F)
+
+
+floor_5years  <- function(value){ return(value - value %% 5) }
+TPA.meta2.1$Sample_5year.window <- paste0(floor_5years(as.numeric(TPA.meta2.1$Sample_Year)),"-",floor_5years(as.numeric(TPA.meta2.1$Sample_Year))+5)
+# Some samples have uncertain dates (up to 20-30 years uncertainty), but for the purposes of these plotting categories we'll use the centrepoint year
+TPA.meta2.1$Sample_5year.window <- sapply(1:nrow(TPA.meta2.1), function(x) ifelse(TPA.meta2.1$Sample_Year[x]=="-",NA, ifelse(is.na(TPA.meta2.1$Sample_5year.window[x]),NA, ifelse(TPA.meta2.1$Sample_Year[x]=="1950-1980","1965-1970",ifelse(TPA.meta2.1$Sample_Year[x]=="1960-1980","1965-1970" ,ifelse(TPA.meta2.1$Sample_Year[x]=="1980-1999","1985-1990",TPA.meta2.1$Sample_5year.window[x]))))))
+
+
+TPA.meta2.1$Sample_year.1990.cuttoff <- ifelse(TPA.meta2.1$Sample_Year>1990,TPA.meta2.1$Sample_Year,"<1990")
+
+TPA.meta2.1$Sample_year.1999.cuttoff <- ifelse(TPA.meta2.1$Sample_Year>1999,TPA.meta2.1$Sample_Year,"<1999")
+TPA.rawseq.year.cuttoff.p <- data.frame(row.names=TPA.meta2.1$Sample_Name, Sample.Year=TPA.meta2.1$Sample_year.1999.cuttoff, stringsAsFactors = F)
+
+```
+\
+\
+# Bring in PHE metadata
+```{r}
+PHE.metadata.linked <- readxl::read_excel(PHE.metadata.linked.file)
+```
+\
+Do some cleanup and factoring of variables
+```{r}
+
+PHE.metadata.linked$age_group <- factor(PHE.metadata.linked$age_group, levels=rev(c("16-24","25-34","35-44","45+","Unknown")))
+
+PHE.metadata.linked$london <- factor(PHE.metadata.linked$london,levels=rev(c("Yes","No","Unknown")))
+PHE.metadata.linked$ukborn <- factor(PHE.metadata.linked$ukborn,levels=rev(c("Yes","No","Unknown")))
+PHE.metadata.linked$hivpos <- factor(PHE.metadata.linked$hivpos, levels=rev(c("Yes","No","Unknown")))
+
+# need to update terminology of 'MSM' to 'GBMSM'
+PHE.metadata.linked[PHE.metadata.linked$gender_orientation=="MSM","gender_orientation"] <- "GBMSM"
+PHE.metadata.linked$gender_orientation <- factor(PHE.metadata.linked$gender_orientation, levels=rev(c("MSW","GBMSM","WSM","MUnknown","Unknown")))
+
+PHE.metadata.linked$phe_centre <- factor(PHE.metadata.linked$phe_centre, levels=rev(c("East Midlands", "East of England", "London", "North East", "North West", "South East", "South West", "West Midlands", "Yorkshire and Humber", "UK (not England)", "Not Known")))
+
+PHE.metadata.linked$TPA.pinecone.sublineage <-  factor(PHE.metadata.linked$TPA.pinecone.sublineage, levels=sublineages.cols.brew$sublineage)
+
+```
+\
+\
+### Extract information about duplicates
+```{r}
+PHE.metadata.duplicates <- PHE.metadata.linked[!is.na(PHE.metadata.linked$dup_flag),]
+PHE.metadata.duplicates <- PHE.metadata.duplicates[!is.na(PHE.metadata.duplicates$Sample_Name),]
+
+
+PHE.patient.matches <- data.frame(
+    stringsAsFactors = FALSE,
+                                   dup_flag = c("1A","1B",
+                                                "2A","2B","3A","3B","4A",
+                                                "4B","5A","5B"),
+                                dup_Patient = c("Patient 1",
+                                                "Patient 1","Patient 2",
+                                                "Patient 2","Patient 3","Patient 3",
+                                                "Patient 4","Patient 4",
+                                                "Patient 5","Patient 5"),
+                         dup_Patient_Sample = c("sample 1",
+                                                "sample 2","sample 1",
+                                                "sample 2","sample 1","sample 2",
+                                                "sample 1","sample 2","sample 1",
+                                                "sample 2")
+                       )
+                       
+
+PHE.metadata.duplicates <- left_join(PHE.metadata.duplicates, PHE.patient.matches, by="dup_flag")
+
+PHE.metadata.duplicates
+```
+
+Duplicate Samples missing metadata are all 'new duplicates' and were excluded due to low mapping coverage (all checked).
+\
+Samples labelled 'ZA' and 'XB' had duplicates in the original dataset, but the reciprocal pairs were excluded due to quality isues.
+\
+Available pairs - Patient 3, Patient 4
+
+```{r}
+PHE.metadata.duplicates.paired <- PHE.metadata.duplicates[PHE.metadata.duplicates$dup_Patient %in% c("Patient 3","Patient 4"),]
+PHE.metadata.duplicates.paired[order(PHE.metadata.duplicates.paired$dup_Patient, PHE.metadata.duplicates.paired$year,PHE.metadata.duplicates.paired$month),c("Sample_Name","dup_Patient", "month.fix", "year")]
+```
+\
+These will be revisited later in the analysis. 
+\
+Patient 4
+HIV-ve MSM (45+), UK born, PHE region D
+2 samples, collected in the same month and year
+Both samples are sublineage 1, and identical (0 pwSNPs)
+Likely the same infection (depending on dates, treatment, etc), but can’t rule out reinfection with same strain.
+\
+Patient 3
+HIV-ve MSM (35-44), not UK born, based in London (C)
+2 samples, collected 9 months apart
+Both samples are sublineage 1, but have 7 pairwise SNPs between them (loads!)
+Reinfection – probably from a different transmission network
+\
+\
+However, based on the sample dates, as well as the outcome of the downstream genetic analysis, we can see that Patient 3 has duplicate infection events (different dates, 10 months apart) and the genomes are distinct (7 SNPs apart), whereas Patient 4 samples were collected in the same month and year (i.e. are likely duplicates from the same infection) and has identical genomes.
+\
+For downstream analysis purposes, we will retain both samples for Patient 3 (discrete infections), but exclude one sample from Patient 4 (duplicate infection samples) - 'PHE150126A' has much better genome coverage, so exclude 'PHE150125A'
+\
+\
+### Further Exclusions \
+PHE130056A - duplicate of PHE130057B (already removed, so not relevant) - don't exclude!
+PHE170402A - quality control sample
+PHE170378A - quality control sample
+
+\
+Exclude duplicate sequences
+```{r}
+duplicate.exclusion.list <- c("PHE150125A","PHE170402A","PHE170378A")
+PHE.metadata.linked <- PHE.metadata.linked[PHE.metadata.linked$Sample_Name %notin% duplicate.exclusion.list,]
+```
+\
+
+### Moving on... \
+
+Define some colour schemes
+```{r}
+# define some colors for each region
+PHE.region.cols.brew <- data.frame(UKHSA.region=c("North East", "North West", "Yorkshire and Humber", "East Midlands", "West Midlands", "East of England", "London", "South East","South West","UK (not England)", "Not Known"), stringsAsFactors=F)
+PHE.region.cols.brew$region.col <- c("#A6CEE3","#1F78B4","#CAB2D6","#33A02C","#B2DF8A","#FF7F00","#E31A1C","#FB9A99","#D4BB02","grey75","grey25")
+
+# HIV color scheme
+PHE.hiv.cols <- data.frame(hivpos=rev(sort(unique(PHE.metadata.linked$hivpos))), stringsAsFactors=F)
+PHE.hiv.cols$hiv.cols <- c("#1f78b4","#b2df8a","grey75")
+
+# Orientation colour scheme
+PHE.orientation.cols <- data.frame(orientation=rev(sort(unique(PHE.metadata.linked$gender_orientation))), stringsAsFactors=F)
+PHE.orientation.cols$orientation <- factor(PHE.orientation.cols$orientation, levels=rev(sort(unique(PHE.metadata.linked$gender_orientation))), labels=c("MSW","GBMSM","WSM","MUnknown","Unknown"))
+PHE.orientation.cols$orientation.cols <- c("#1f78b4","#b2df8a","#fb9a99","#a6cee3","grey75")
+
+# UK born colour scheme
+PHE.ukborn.cols <- data.frame(ukborn=rev(sort(unique(PHE.metadata.linked$ukborn))),ukborn.cols=c("#1f78b4","#b2df8a","grey75"),stringsAsFactors = F)
+
+# London based colour scheme
+PHE.london.cols <- data.frame(london=rev(sort(unique(PHE.metadata.linked$london))),london.cols=c("#1f78b4","#b2df8a","grey75"),stringsAsFactors = F)
+
+
+# Age group colour scheme
+PHE.Age.cols <- data.frame(age_group=rev(sort(unique(PHE.metadata.linked$age_group))),stringsAsFactors = T)
+PHE.Age.cols$age_group.cols <- c(brewer.pal(n=4,"YlGnBu"),"grey75")
+
+# Sample Date colour scheme
+PHE.year.cols <- data.frame(year=(sort(unique(PHE.metadata.linked$year))),stringsAsFactors = T)
+PHE.year.cols$year.cols <- brewer.pal(n=7,"YlOrRd")
+
+# Sample Date (all global data, but with 1990 cuttoff)
+TPA.year.cuttoff.cols <- data.frame(date.cuttoff=c("<1999",1999:2019), date.cuttoff.col=c("#F2F2F2",colorRampPalette(brewer.pal(7, "YlOrRd"))(length(1999:2019))))
+
+
+```
+\
+\
+#####
+## First describe the sequenced population as a whole
+\
+Set order of PHE regions
+```{r}
+PHE.metadata.linked$phe_centre <- factor(PHE.metadata.linked$phe_centre, levels=rev(PHE.region.cols.brew$UKHSA.region))
+```
+\
+Generate some basic statistics about geographical PHE regions (anonymised)
+```{r}
+PHE.count.all <- PHE.metadata.linked %>% 
+  dplyr::summarise(count.per.region=n())
+
+PHE.count.years <- PHE.metadata.linked %>% 
+  dplyr::group_by(year) %>%
+  dplyr::summarise(count.per.year=n()) %>%
+  ungroup() %>%
+  dplyr::mutate(perc.per.year=(count.per.year/sum(count.per.year))*100)
+
+# Generate some stats about HIV status
+PHE.HIV.counts <- PHE.metadata.linked %>% 
+  dplyr::group_by(hivpos) %>%
+  dplyr::summarise(Count=n()) %>%
+  dplyr::mutate(total.region=sum(Count)) %>%
+  dplyr::mutate(fraction=Count/total.region) %>%
+  dplyr::arrange(desc(hivpos), .by_group=T) %>%
+  dplyr::mutate(cum_fract = cumsum(fraction)) %>%
+  dplyr::mutate(cum_fract.mid = cum_fract-(fraction/2)) %>%
+  dplyr::mutate(HIV.perc=(Count/sum(Count)*100))
+  
+# Generate some stats about gender orientation
+PHE.orientation.counts <- PHE.metadata.linked %>% 
+  dplyr::group_by(gender_orientation) %>%
+  dplyr::summarise(Count=n()) %>%
+  dplyr::mutate(total.region=sum(Count)) %>%
+  dplyr::arrange(desc(gender_orientation), .by_group=T) %>%
+  dplyr::mutate(fraction=Count/total.region, cum_fract=cumsum(fraction), cum_fract.mid = cum_fract-(fraction/2)) %>% 
+  dplyr::mutate(orientation.perc=(Count/sum(Count)*100))
+
+# Generate some stats about UK born (vague category that's unfortunately only marginally helpful)
+PHE.UKborn.counts <- PHE.metadata.linked %>% 
+  dplyr::group_by(ukborn) %>%
+  dplyr::summarise(Count=n()) %>%
+  dplyr::mutate(total.region=sum(Count)) %>%
+  dplyr::arrange(desc(ukborn), .by_group=T) %>%
+  dplyr::mutate(fraction=Count/total.region, cum_fract=cumsum(fraction), cum_fract.mid = cum_fract-(fraction/2)) %>% 
+  dplyr::mutate(UKborn.perc=(Count/sum(Count)*100))
+  
+# Generate some stats about London based
+PHE.London.counts <- PHE.metadata.linked %>% 
+  dplyr::group_by(london) %>%
+  dplyr::summarise(Count=n()) %>%
+  dplyr::mutate(total.region=sum(Count)) %>%
+  dplyr::arrange(desc(london), .by_group=T) %>%
+  dplyr::mutate(fraction=Count/total.region, cum_fract=cumsum(fraction), cum_fract.mid = cum_fract-(fraction/2)) %>%
+  dplyr::mutate(London.perc=(Count/sum(Count)*100))
+
+# Generate some stats about Age group
+PHE.Age.counts <- PHE.metadata.linked %>% 
+  dplyr::group_by(age_group) %>%
+  dplyr::summarise(Count=n()) %>%
+  dplyr::mutate(total.region=sum(Count)) %>%
+  dplyr::arrange(desc(age_group), .by_group=T) %>%
+  dplyr::mutate(fraction=Count/total.region, cum_fract=cumsum(fraction), cum_fract.mid = cum_fract-(fraction/2)) %>%
+  dplyr::mutate(Age.perc=(Count/sum(Count)*100))
+
+# Generate some stats about Lineage group
+PHE.Lineage.counts <- PHE.metadata.linked %>% 
+  dplyr::group_by(TPA_Lineage) %>%
+  dplyr::summarise(Count=n()) %>%
+  dplyr::mutate(total.region=sum(Count)) %>%
+  dplyr::arrange(desc(TPA_Lineage), .by_group=T) %>%
+  dplyr::mutate(fraction=Count/total.region, cum_fract=cumsum(fraction), cum_fract.mid = cum_fract-(fraction/2)) %>%
+  dplyr::mutate(Lineage.perc=(Count/sum(Count)*100))
+
+# Generate some stats about sublineage group
+PHE.sublineage.counts <- PHE.metadata.linked %>% 
+  dplyr::group_by(TPA.pinecone.sublineage) %>%
+  dplyr::summarise(Count=n()) %>%
+  dplyr::mutate(total.region=sum(Count)) %>%
+  dplyr::arrange(desc(TPA.pinecone.sublineage), .by_group=T) %>%
+  dplyr::mutate(fraction=Count/total.region, cum_fract=cumsum(fraction), cum_fract.mid = cum_fract-(fraction/2)) %>%
+  dplyr::mutate(Sublineage.perc=(Count/sum(Count)*100))
+```
+\
+Make some plots
+```{r, fig.width=10, fig.height=8}
+# Make hbar plot of sample counts by region
+p.all.hbarplot <- ggplot(PHE.count.all, aes(x=count.per.region,y="")) +
+  geom_barh(stat="identity", position="stack", width=0.65) +
+  theme_light() +
+  theme.text.size + theme(legend.key.size = unit(0.55,"line"),legend.position='none') +
+  scale_fill_manual(values="grey30") + 
+  geom_text(data=PHE.count.all, aes((count.per.region+12), "",label=count.per.region), size=theme.text.size.within, inherit.aes = F) +
+  labs(y="All", x="Sample Count") +
+  coord_cartesian(xlim=c(0,260)) +
+  guides(fill=guide_legend(nrow=4)) 
+#p.all.hbarplot
+
+# make temporal bubbleplot of counts by region
+p.all.year.bubbleplot <- ggplot(PHE.count.years, aes(as.numeric(year), y="All")) +
+  geom_point(alpha=0.65, aes(size=count.per.year)) + 
+  geom_line(alpha=0.25) +
+  guides(colour='none') +
+  scale_size_area(max_size = 7,breaks=c(1,5,10,25,50)) + 
+  guides(size=guide_legend(nrow=2)) +
+  theme_light() +
+  scale_fill_manual(values="grey30") + 
+  theme.text.size + theme(legend.key.size = unit(0.55,"line"),legend.position='none') +
+  labs(y="", x="Sample Year", size="Count") 
+#p.all.year.bubbleplot
+
+# Make proportional hbar plot of HIV status
+p.all.hiv.hbarplot <- ggplot(PHE.HIV.counts, aes(Count,y="",fill=hivpos)) +
+  geom_barh(stat="identity", position="fill", width=0.65) +
+  theme_light() +
+  theme.text.size + theme(legend.key.size = unit(0.55,"line"),legend.position='none') +
+  scale_fill_manual(name="HIV +ve",values=PHE.hiv.cols$hiv.cols, breaks=PHE.hiv.cols$hivpos) +
+  labs(y="All", x="HIV +ve") +
+  guides(fill=guide_legend(nrow=3)) +
+  geom_text(data=PHE.HIV.counts, aes(cum_fract.mid, y="",label=Count), size=theme.text.size.within, inherit.aes = F) +
+  NULL
+#p.all.hiv.hbarplot
+
+p.all.orientation.hbarplot <- ggplot(PHE.orientation.counts, aes(Count,y="",fill=gender_orientation)) +
+  geom_barh(stat="identity", position="fill", width=0.65) +
+  theme_light() +
+  theme.text.size + theme(legend.key.size = unit(0.55,"line"),legend.position='none') +
+  scale_fill_manual(name="Orientation",values=PHE.orientation.cols$orientation.cols, breaks=PHE.orientation.cols$orientation) +
+  labs(y="All", x="Orientation") +
+  guides(fill=guide_legend(nrow=3)) +
+  geom_text(data=PHE.orientation.counts, aes(cum_fract.mid, y="",label=Count), size=theme.text.size.within, inherit.aes = F)
+#p.all.orientation.hbarplot
+
+p.all.ukborn.hbarplot <- ggplot(PHE.UKborn.counts, aes(Count,y="",fill=ukborn)) +
+  geom_barh(stat="identity", position="fill", width=0.65) +
+  theme_light() +
+  theme.text.size + theme(legend.key.size = unit(0.55,"line"),legend.position='none') +
+  scale_fill_manual(name="UK\nBorn",values=PHE.ukborn.cols$ukborn.cols, breaks=PHE.ukborn.cols$ukborn) +
+  labs(y="All", x="UK Born") +
+  #guides(fill=guide_legend(nrow=3)) +
+  geom_text(data=PHE.UKborn.counts, aes(cum_fract.mid, y="",label=Count), size=theme.text.size.within, inherit.aes = F)
+#p.all.ukborn.hbarplot
+
+p.all.London.hbarplot <- ggplot(PHE.London.counts, aes(Count,y="",fill=london)) +
+  geom_barh(stat="identity", position="fill", width=0.65) +
+  theme_light() +
+  theme.text.size + theme(legend.key.size = unit(0.55,"line"),legend.position='none') +
+  scale_fill_manual(name="London",values=PHE.london.cols$london.cols, breaks=PHE.london.cols$london) +
+  labs(y="All", x="London") +
+  guides(fill=guide_legend(nrow=3)) +
+  geom_text(data=PHE.London.counts, aes(cum_fract.mid, y="",label=Count), size=theme.text.size.within, inherit.aes = F)
+#p.all.London.hbarplot
+
+p.all.Age.hbarplot <- ggplot(PHE.Age.counts, aes(Count,y="",fill=age_group)) +
+  geom_barh(stat="identity", position="fill", width=0.65) +
+  theme_light() +
+  theme.text.size + theme(legend.key.size = unit(0.55,"line"),legend.position='none') +
+  scale_fill_manual(name="Age\nGroup",values=PHE.Age.cols$age_group.cols, breaks=PHE.Age.cols$age_group) +
+  labs(y="All", x="Age Group") +
+  guides(fill=guide_legend(nrow=3)) +
+  geom_text(data=PHE.Age.counts, aes(cum_fract.mid, y="",label=Count), size=theme.text.size.within, inherit.aes = F)
+#p.all.Age.hbarplot
+```
+\
+Plot combined plot for 'all samples'
+```{r, fig.width=12, fig.height=10}
+PHE.all.combiplot.1 <- plot_grid(p.all.year.bubbleplot, p.all.hbarplot + y.theme.strip, p.all.orientation.hbarplot + y.theme.strip, p.all.hiv.hbarplot + y.theme.strip, p.all.Age.hbarplot + y.theme.strip, nrow=1, align="h", rel_widths=c(4,2,2,2,2), scale=0.9)
+
+PHE.all.combiplot.1
+```
+\
+\
+Next just describe population distributions by PHE region
+```{r}
+# generate some basic statistics about geographical PHE regions (anonymised)
+PHE.geo.count <- PHE.metadata.linked %>% 
+  dplyr::group_by(phe_centre) %>%
+  dplyr::summarise(count.per.region=n()) %>%
+  dplyr::mutate(total.count=sum(count.per.region),fraction=count.per.region/total.count)
+
+PHE.geo.count.years <- PHE.metadata.linked %>% 
+  dplyr::group_by(phe_centre,year) %>%
+  dplyr::summarise(count.per.region.year=n())
+
+PHE.geo.count.years.lineage <- PHE.metadata.linked %>% 
+  dplyr::group_by(phe_centre,year,TPA_Lineage) %>%
+  dplyr::summarise(count.per.region.year=n()) %>%
+  dplyr::mutate(total.count.year=sum(count.per.region.year)) %>%
+  dplyr::ungroup() %>%
+  tidyr::pivot_wider(names_from=TPA_Lineage, values_from = count.per.region.year)
+PHE.geo.count.years.lineage[is.na(PHE.geo.count.years.lineage)] <- 0
+PHE.geo.count.years.lineage$year <- as.numeric(PHE.geo.count.years.lineage$year)
+
+# Generate some stats about HIV status
+PHE.geo.HIV.counts <- PHE.metadata.linked %>% 
+  dplyr::group_by(phe_centre,hivpos) %>%
+  dplyr::summarise(count.per.region.hiv=n()) %>%
+  dplyr::mutate(total.region=sum(count.per.region.hiv)) %>%
+  dplyr::mutate(fraction=count.per.region.hiv/total.region) %>%
+  dplyr::arrange(desc(hivpos), .by_group=T) %>%
+  dplyr::mutate(cum_fract = cumsum(fraction)) %>%
+  dplyr::mutate(cum_fract.mid = cum_fract-(fraction/2))
+
+# Double Check HIV status data for non-PHE dataset - confirmed no HIV+ves from non-MSM. 
+PHE.sourcelab.HIV.counts <- PHE.metadata.linked %>% 
+  dplyr::group_by(is.PHE, gender_orientation, hivpos) %>%
+  dplyr::summarise(count.per.orientation.hiv=n()) #%>%
+  #dplyr::filter(is.PHE!="PHE")
+
+# Get total population stats for HIV
+PHE.all.HIV.counts <-  PHE.metadata.linked %>% 
+  dplyr::group_by(hivpos) %>%
+  dplyr::summarise(count.hiv=n()) %>%
+  dplyr::mutate(count.total=sum(count.hiv), fraction=count.hiv/count.total)
+
+  
+# Generate some stats about gender orientation
+PHE.orientation.counts <- PHE.metadata.linked %>% 
+  dplyr::group_by(gender_orientation) %>%
+  dplyr::summarise(orientation.count=n()) %>%
+  dplyr::mutate(orientation.percent=(orientation.count/sum(orientation.count)*100))
+
+PHE.geo.orientation.counts <- PHE.metadata.linked %>% 
+  dplyr::group_by(phe_centre,gender_orientation) %>%
+  dplyr::summarise(count.per.region.orientation=n()) %>%
+  dplyr::mutate(total.region=sum(count.per.region.orientation)) %>%
+  dplyr::arrange(desc(gender_orientation), .by_group=T) %>%
+  dplyr::mutate(fraction=count.per.region.orientation/total.region, cum_fract=cumsum(fraction), cum_fract.mid = cum_fract-(fraction/2)) %>% 
+  dplyr::mutate(orientation.percent=(count.per.region.orientation/sum(count.per.region.orientation)*100))
+
+# Generate some stats about UK born
+PHE.geo.UKborn <- PHE.metadata.linked %>% 
+  dplyr::group_by(phe_centre, ukborn) %>%
+  dplyr::summarise(Count=n()) %>%
+  dplyr::mutate(total.region=sum(Count)) %>%
+  dplyr::arrange(desc(ukborn), .by_group=T) %>%
+  dplyr::mutate(fraction=Count/total.region, cum_fract=cumsum(fraction), cum_fract.mid = cum_fract-(fraction/2))
+  
+# Generate some stats about London based
+PHE.geo.London <- PHE.metadata.linked %>% 
+  dplyr::group_by(phe_centre, london) %>%
+  dplyr::summarise(Count=n()) %>%
+  dplyr::mutate(total.region=sum(Count)) %>%
+  dplyr::arrange(desc(london), .by_group=T) %>%
+  dplyr::mutate(fraction=Count/total.region, cum_fract=cumsum(fraction), cum_fract.mid = cum_fract-(fraction/2))
+
+# Generate some stats about Age group
+PHE.geo.Age <- PHE.metadata.linked %>% 
+  dplyr::group_by(phe_centre, age_group) %>%
+  dplyr::summarise(Count=n()) %>%
+  dplyr::mutate(total.region=sum(Count)) %>%
+  dplyr::arrange(desc(age_group), .by_group=T) %>%
+  dplyr::mutate(fraction=Count/total.region, cum_fract=cumsum(fraction), cum_fract.mid = cum_fract-(fraction/2))
+
+# Generate some stats about Lineage group
+PHE.geo.Lineage <- PHE.metadata.linked %>% 
+  dplyr::group_by(phe_centre, TPA_Lineage) %>%
+  dplyr::summarise(Count=n()) %>%
+  dplyr::mutate(total.region=sum(Count)) %>%
+  dplyr::arrange(desc(TPA_Lineage), .by_group=T) %>%
+  dplyr::mutate(fraction=Count/total.region, cum_fract=cumsum(fraction), cum_fract.mid = cum_fract-(fraction/2))
+
+# Generate some stats about sublineage group
+PHE.geo.sublineage <- PHE.metadata.linked %>% 
+  dplyr::group_by(phe_centre, TPA.pinecone.sublineage) %>%
+  dplyr::summarise(Count=n()) %>%
+  dplyr::mutate(total.region=sum(Count)) %>%
+  dplyr::arrange(desc(TPA.pinecone.sublineage), .by_group=T) %>%
+  dplyr::mutate(fraction=Count/total.region, cum_fract=cumsum(fraction), cum_fract.mid = cum_fract-(fraction/2))
+```
+\
+Make some plots
+```{r, fig.width=10, fig.height=8}
+# Make hbar plot of sample counts by region
+p.region.hbarplot <- ggplot(PHE.geo.count, aes(count.per.region,phe_centre, fill=phe_centre)) +
+  geom_barh(stat="identity", position="stack", width=0.65) +
+  theme_light() +
+  theme.text.size + theme(legend.key.size = unit(0.55,"line"),legend.position='bottom') +
+  scale_fill_manual(name="UKHSA\nRegion",values=PHE.region.cols.brew$region.col, breaks=PHE.region.cols.brew$UKHSA.region) +
+  geom_text(data=PHE.geo.count, aes((count.per.region+12), phe_centre,label=count.per.region), size=theme.text.size.within, inherit.aes = F) +
+  labs(y="UKHSA Region", x="Sample Count") +
+  #coord_cartesian(xlim=c(0,130)) +
+  coord_cartesian(xlim=c(0,260)) +
+  guides(fill=guide_legend(ncol=2)) 
+#p.region.hbarplot
+
+# make temporal bubbleplot of counts by region
+p.region.year.bubbleplot <- ggplot(PHE.geo.count.years, aes(as.numeric(year), phe_centre, colour=phe_centre)) +
+  geom_point(alpha=0.65, aes(size=count.per.region.year)) + 
+  geom_line(alpha=0.25) +
+  guides(colour='none') +
+  scale_size_area(max_size = 7,breaks=c(1,5,10,25,50)) + 
+  guides(size=guide_legend(nrow=2, direction = 'horizontal', byrow=T)) +
+  theme_light() +
+  scale_color_manual(name="UKHSA\nRegion",values=PHE.region.cols.brew$region.col, breaks=PHE.region.cols.brew$UKHSA.region) +
+  theme.text.size + theme(legend.key.size = unit(0.55,"line"),legend.position='bottom') +
+  labs(y="UKHSA Region", x="Sample Year", size="Count") 
+#p.region.year.bubbleplot
+
+# Or a barplot of lineage by year & PHE region?
+p.region.year.bubbleplot.barplot.facet.lineage <- PHE.geo.count.years.lineage %>% tidyr::pivot_longer(c(SS14, Nichols), names_to="TPA_Lineage", values_to="Count") %>%
+  ggplot(aes(year, Count, fill=TPA_Lineage)) + 
+  geom_bar(stat='identity', width=0.6) + 
+  facet_grid(phe_centre~., scales='free') +
+  guides(size=guide_legend(nrow=2)) +
+  theme_light() +
+  theme.text.size + theme(legend.key.size = unit(0.55,"line"),legend.position='bottom') +
+  scale_fill_manual(name="TPA\nLineage",values=TPA_Lineage.cols$Lineage.col, breaks=TPA_Lineage.cols$Lineage) +
+  theme(strip.background = element_rect(color='white', fill='white',linetype="solid"), strip.text.y = element_text(color = "grey25", size=7, angle=0)) 
+#p.region.year.bubbleplot.barplot.facet.lineage
+
+# Make proportional hbar plot of HIV status
+p.region.hiv.hbarplot <- ggplot(PHE.geo.HIV.counts, aes(count.per.region.hiv,phe_centre,fill=hivpos)) +
+  geom_barh(stat="identity", position="fill", width=0.65) +
+  theme_light() +
+  theme.text.size + theme(legend.key.size = unit(0.55,"line"),legend.position='bottom') +
+  scale_fill_manual(name="HIV +ve",values=PHE.hiv.cols$hiv.cols, breaks=PHE.hiv.cols$hivpos) +
+  labs(y="UKHSA Region", x="HIV +ve") +
+  guides(fill=guide_legend(nrow=3)) +
+  geom_text(data=PHE.geo.HIV.counts, aes(cum_fract.mid, phe_centre,label=count.per.region.hiv), size=theme.text.size.within, inherit.aes = F) +
+  NULL
+#p.region.hiv.hbarplot
+
+p.region.orientation.hbarplot <- ggplot(PHE.geo.orientation.counts, aes(count.per.region.orientation,phe_centre,fill=gender_orientation)) +
+  geom_barh(stat="identity", position="fill", width=0.65) +
+  theme_light() +
+  theme.text.size + theme(legend.key.size = unit(0.55,"line"),legend.position='bottom') +
+  scale_fill_manual(name="Orientation",values=PHE.orientation.cols$orientation.cols, breaks=PHE.orientation.cols$orientation) +
+  labs(y="UKHSA Region", x="Orientation") +
+  guides(fill=guide_legend(ncol=1)) +
+  geom_text(data=PHE.geo.orientation.counts, aes(cum_fract.mid, phe_centre,label=count.per.region.orientation), size=theme.text.size.within, inherit.aes = F)
+#p.region.orientation.hbarplot
+
+p.region.ukborn.hbarplot <- ggplot(PHE.geo.UKborn, aes(Count,phe_centre,fill=ukborn)) +
+  geom_barh(stat="identity", position="fill", width=0.65) +
+  theme_light() +
+  theme.text.size + theme(legend.key.size = unit(0.55,"line"),legend.position='bottom') +
+  scale_fill_manual(name="UK Born",values=PHE.ukborn.cols$ukborn.cols, breaks=PHE.ukborn.cols$ukborn) +
+  labs(y="UKHSA Region", x="UK Born") +
+  guides(fill=guide_legend(nrow=3)) +
+  geom_text(data=PHE.geo.UKborn, aes(cum_fract.mid, phe_centre,label=Count), size=theme.text.size.within, inherit.aes = F)
+#p.region.ukborn.hbarplot
+
+p.region.London.hbarplot <- ggplot(PHE.geo.London, aes(Count,phe_centre,fill=london)) +
+  geom_barh(stat="identity", position="fill", width=0.65) +
+  theme_light() +
+  theme.text.size + theme(legend.key.size = unit(0.55,"line"),legend.position='bottom') +
+  scale_fill_manual(name="London",values=PHE.london.cols$london.cols, breaks=PHE.london.cols$london) +
+  labs(y="UKHSA Region", x="London") +
+  guides(fill=guide_legend(nrow=3)) +
+  geom_text(data=PHE.geo.London, aes(cum_fract.mid, phe_centre,label=Count), size=theme.text.size.within, inherit.aes = F)
+#p.region.London.hbarplot
+
+p.region.Age.hbarplot <- ggplot(PHE.geo.Age, aes(Count,phe_centre,fill=age_group)) +
+  geom_barh(stat="identity", position="fill", width=0.65) +
+  theme_light() +
+  theme.text.size + theme(legend.key.size = unit(0.55,"line"),legend.position='bottom') +
+  scale_fill_manual(name="Age\nGroup",values=PHE.Age.cols$age_group.cols, breaks=PHE.Age.cols$age_group) +
+  labs(y="UKHSA Region", x="Age Group") +
+  guides(fill=guide_legend(ncol=1)) +
+  geom_text(data=PHE.geo.Age, aes(cum_fract.mid, phe_centre,label=Count), size=theme.text.size.within, inherit.aes = F)
+#p.region.Age.hbarplot
+```
+\
+Combined plot
+```{r, fig.width=12, fig.height=10}
+PHE.region.combiplot.1 <- plot_grid(p.region.year.bubbleplot, p.region.hbarplot + y.theme.strip, p.region.orientation.hbarplot + y.theme.strip, p.region.hiv.hbarplot + y.theme.strip, p.region.Age.hbarplot + y.theme.strip, nrow=1, align="h", rel_widths=c(4,2,2,2,2), scale=0.9)
+
+PHE.region.combiplot.1
+```
+
+
+\
+Regions as a complex multipanel plot
+```{r, fig.width=10, fig.height=4.5}
+
+
+# legends
+PHE.region.combiplot.1.legends <- plot_grid(get_legend(p.region.year.bubbleplot), get_legend(p.region.hbarplot + y.theme.strip), get_legend(p.region.orientation.hbarplot + y.theme.strip), get_legend(p.region.hiv.hbarplot + y.theme.strip), get_legend(p.region.Age.hbarplot + y.theme.strip), nrow=1, align="h", rel_widths=c(6,4,4,4,4), scale=0.95)
+
+
+# Arrange plots vertically
+p.year.bubbleplot.combi <- plot_grid(p.all.year.bubbleplot + x.theme.strip, p.region.year.bubbleplot + legend.strip, ncol=1, align="v",axis="lr", rel_heights=c(1,7))
+
+p.region.hbar.counts.combi <- plot_grid(p.all.hbarplot + x.theme.strip + y.theme.strip, p.region.hbarplot + y.theme.strip + legend.strip, ncol=1, align="v",axis="lr", rel_heights=c(1,7))
+
+p.region.hbar.orientation.combi <- plot_grid(p.all.orientation.hbarplot + x.theme.strip + y.theme.strip, p.region.orientation.hbarplot + y.theme.strip + legend.strip, ncol=1, align="v",axis="lr", rel_heights=c(1,7))
+
+p.region.hbar.hiv.combi <- plot_grid(p.all.hiv.hbarplot + x.theme.strip + y.theme.strip, p.region.hiv.hbarplot + y.theme.strip + legend.strip, ncol=1, align="v",axis="lr", rel_heights=c(1,7))
+
+p.region.hbar.Age.combi <- plot_grid(p.all.Age.hbarplot + x.theme.strip + y.theme.strip, p.region.Age.hbarplot + y.theme.strip + legend.strip, ncol=1, align="v",axis="lr", rel_heights=c(1,7))
+
+# Combine the plots
+p.region.hbar.combi.plus.all <- plot_grid(p.year.bubbleplot.combi, p.region.hbar.counts.combi, p.region.hbar.orientation.combi, p.region.hbar.hiv.combi, p.region.hbar.Age.combi, nrow=1, rel_widths=c(6,4,4,4,4), labels = c("A","B","C","D","E"), label_size=panel.lab.size, vjust=0.25)
+# and add the legends on top
+p.region.hbar.combi.plus.all.with.legends <- plot_grid(p.region.hbar.combi.plus.all, PHE.region.combiplot.1.legends, ncol=1, rel_heights=c(6,1), scale = 0.95)
+
+
+
+p.region.hbar.combi.plus.all.with.legends
+#ggsave(paste0(Figure_output_directory, "SupFig2_TPA-PHE_Sample-metadistros-by-phe_region+all-combi.",format(Sys.Date(),"%Y%m%d"),".pdf"), units='mm', width=240, height=135, device='pdf', dpi=1200)
+
+```
+\
+\
+Now lets look at some genetic data
+\
+### Make ML tree with sublineage tippoints
+```{r}
+TPA.MLtree.ggtree.tippoint <- TPA.MLtree.ggtree %<+% data.frame(Sample_Name=TPA.meta2.1$Sample_Name, Sublineage=TPA.meta2.1$TPA.pinecone.sublineage,stringsAsFactors = F) + 
+  geom_tippoint(aes(color=Sublineage), size=0.5, alpha=0.5, show.legend = FALSE) + 
+  scale_color_manual(name="Sublineage",values=sublineages.cols.brew$sublineage.cols, breaks=sublineages.cols.brew$sublineage)
+```
+\
+Add metadata
+```{r, fig.width=10, fig.height=10}
+# Continent
+p.TPA.MLtree.PHE <- gheatmap(TPA.MLtree.ggtree.tippoint,
+               TPA.rawseq.continents.p, color=NULL,width=0.075,offset=0.00000025, colnames_angle=-45,colnames_offset_y=0.02, hjust=-0.0,font.size=theme.text.size.within) + 
+  scale_fill_manual(name="Continent",values=continental.cols.brew2$continent.col, breaks=continental.cols.brew2$Continent, guide = guide_legend(order = 1,ncol=2)) +
+  theme.text.size + theme(legend.key.size = unit(0.55,"line"),legend.position='right') +
+  new_scale_fill()
+
+# is UK
+p.TPA.MLtree.PHE <- gheatmap(p.TPA.MLtree.PHE,
+               TPA.rawseq.UK.p, color=NULL,width=0.075,offset=0.00001025, colnames_angle=-45,colnames_offset_y=0.02, hjust=-0.0,font.size=theme.text.size.within) + 
+  scale_fill_manual(name="England/Other", values=c("black","grey95"), breaks=c("England","Other"), guide = guide_legend(order = 2,ncol=2)) +
+  theme.text.size + theme(legend.key.size = unit(0.55,"line"),legend.position='right') +
+  new_scale_fill()
+
+# Lineage
+p.TPA.MLtree.PHE <- gheatmap(p.TPA.MLtree.PHE,TPA.rawseq.Lineage.p, color=NULL,width=0.075,offset=0.00002025, colnames_angle=-45,colnames_offset_y=0.02, hjust=-0.0,font.size=theme.text.size.within) + 
+  scale_fill_manual(name="Lineage",values=TPA_Lineage.cols$Lineage.col, breaks=TPA_Lineage.cols$Lineage, guide = guide_legend(order = 3, ncol=2)) + theme.text.size + theme(legend.key.size = unit(0.55,"line"),legend.position='right') +
+   new_scale_fill() +
+  NULL
+
+# sublineage
+p.TPA.MLtree.PHE <- gheatmap(p.TPA.MLtree.PHE, data.frame(row.names=TPA.meta2.1$Sample_Name, Sublineage=TPA.meta2.1$TPA.pinecone.sublineage,stringsAsFactors = F), color=NULL,width=0.075,offset=0.00003025, colnames_angle=-45,colnames_offset_y=0.02, hjust=-0.0,font.size=theme.text.size.within) + 
+  scale_fill_manual(name="Sublineage",values=sublineages.cols.brew$sublineage.cols, breaks=sublineages.cols.brew$sublineage, guide = guide_legend(order = 4, ncol=3)) + theme.text.size + theme(legend.key.size = unit(0.55,"line"),legend.position='right') +
+   new_scale_fill() +
+  NULL
+```
+\
+plot
+```{r, fig.width=10, fig.height=10}
+p.TPA.MLtree.PHE
+
+#ggsave(paste0(Figure_output_directory, "SupFig3_TPA-PHE_Global_Phylo+UK-highlights.",format(Sys.Date(),"%Y%m%d"),".pdf"), units='mm', width=185, height=160, device='pdf', dpi=1200)
+```
+\
+\
+### Geographic distributions of Lineages and Sublineages
+What about sublineages?
+```{r}
+p.region.Lineage.hbarplot <- ggplot(PHE.geo.Lineage, aes(Count,phe_centre,fill=TPA_Lineage)) +
+  geom_barh(stat="identity", position="fill", width=0.65) +
+  theme_light() +
+  theme.text.size + theme(legend.key.size = unit(0.55,"line"),legend.position='bottom') +
+  scale_fill_manual(name="TPA\nLineage",values=TPA_Lineage.cols$Lineage.col, breaks=TPA_Lineage.cols$Lineage) +
+  labs(y="UKHSA Region", x="TPA Lineage") +
+  guides(fill=guide_legend(nrow=3)) +
+  #geom_text(data=PHE.geo.Lineage, aes(cum_fract.mid, phe_centre,label=Count), size=theme.text.size.within, inherit.aes = F) +
+  NULL
+
+p.region.sublineage.hbarplot <- ggplot(PHE.geo.sublineage, aes(Count,phe_centre,fill=TPA.pinecone.sublineage)) +
+  geom_barh(stat="identity", position="fill", width=0.65) +
+  theme_light() +
+  theme.text.size + theme(legend.key.size = unit(0.55,"line"),legend.position='bottom') +
+  scale_fill_manual(name="TPA\nSublineage",values=sublineages.cols.brew$sublineage.cols, breaks=sublineages.cols.brew$sublineage) +
+  labs(y="UKHSA Region", x="TPA Sublineage") +
+  guides(fill=guide_legend(nrow=4)) +
+  #geom_text(data=PHE.geo.sublineage, aes(cum_fract.mid, phe_centre,label=Count), size=theme.text.size.within, inherit.aes = F) +
+  NULL
+
+```
+\
+Combi plot (geography lineages)
+```{r}
+PHE.region.combiplot.2.lineages <- plot_grid(p.region.year.bubbleplot +legend.strip, p.region.hbarplot + y.theme.strip + legend.strip + coord_cartesian(xlim=c(0,150)), p.region.Lineage.hbarplot + y.theme.strip +legend.strip, p.region.sublineage.hbarplot + y.theme.strip +legend.strip, nrow=1, align="h", rel_widths=c(6,3,4,4), scale=0.99, labels=c("C","D","E","F"), label_size=panel.lab.size)
+
+# separate out the plot for the legends
+p.region.year.bubbleplot.legend <- get_legend(p.region.year.bubbleplot)
+p.region.hbarplot.legend <- get_legend(p.region.hbarplot + y.theme.strip)
+p.region.Lineage.hbarplot.legend <- get_legend(p.region.Lineage.hbarplot + y.theme.strip)
+p.region.sublineage.hbarplot.legend <- get_legend(p.region.sublineage.hbarplot + y.theme.strip)
+
+PHE.region.combiplot.2.lineages.legend <- plot_grid(p.region.year.bubbleplot.legend, p.region.hbarplot.legend, p.region.Lineage.hbarplot.legend, p.region.sublineage.hbarplot.legend, nrow=1, align="h", rel_widths=c(6,3,4,4))
+
+PHE.region.combiplot.2.lineages <- plot_grid(PHE.region.combiplot.2.lineages, PHE.region.combiplot.2.lineages.legend, rel_heights = c(4,1), ncol=1)
+
+PHE.region.combiplot.2.lineages
+```
+\
+OK, let's now add a map of these geographical distributions
+
+\
+Let's used ONS published shape files - there is one available that shows Public Health England region boundaries. 
+```{r}
+
+# Generate approximate regional GPS coords
+PHE.region.GPS <- data.frame(
+  stringsAsFactors = FALSE,
+          phe_centre = c("East Midlands",
+                         "East of England","London","North East","North West",
+                         "South East","South West","West Midlands",
+                         "Yorkshire and Humber","UK (not England)","Not Known"),
+            Longitude = c(-0.7,0.5,-0.2,-1.9,-2.4,
+                         0.05,-2.9,-2,-0.8,0.1,0.63),
+           Latitude = c(52.9,52.4,51.5,55,53.7,
+                         51.1,51,52.6,53.8,54.7,54.1)
+  )  
+PHE.region.GPS <- left_join(PHE.region.GPS, PHE.geo.Lineage[PHE.geo.Lineage$TPA_Lineage=="SS14",c("phe_centre","Count")], by="phe_centre")
+colnames(PHE.region.GPS)[4] <- "SS14"
+PHE.region.GPS <- left_join(PHE.region.GPS, PHE.geo.Lineage[PHE.geo.Lineage$TPA_Lineage=="Nichols",c("phe_centre","Count")], by="phe_centre")
+colnames(PHE.region.GPS)[5] <- "Nichols"
+PHE.region.GPS[is.na(PHE.region.GPS)] <- 0
+
+PHE.region.GPS <- left_join(PHE.region.GPS, PHE.geo.Lineage[PHE.geo.Lineage$TPA_Lineage=="SS14",c("phe_centre","total.region")], by="phe_centre")
+colnames(PHE.region.GPS)[6] <- "Region_Count"
+
+PHE.region.GPS$radius <- 0.5*(1-1/sqrt(PHE.region.GPS$Region_Count))
+
+
+###############################
+# Import datafile from https://geoportal.statistics.gov.uk/datasets/public-health-england-centres-december-2016-full-clipped-boundaries-in-england/explore?location=52.950000%2C-2.000000%2C6.88
+
+UK.shapefile <- readOGR(dsn=UK.publichealth.shapefile.data)
+
+#Reshape for ggplot2 using the Broom package
+UK.mapdata <- tidy(UK.shapefile, region="phec16nm")
+
+#UK.gg <- ggplot() + geom_polygon(data = UK.mapdata, aes(x = long, y = lat, group = group), color = "#FFFFFF", size = 0.25)
+UK.gg <- ggplot() + geom_polygon(data = UK.mapdata, aes(x = long, y = lat, group = group), color="grey25", fill="grey90", size = 0.075)
+
+UK.gg <- UK.gg + coord_fixed(1) + theme_nothing()
+#UK.gg
+
+# Convert UK regions to be compatible with map
+# First find centre point for each region
+UK.mapdata.regions.meancoords <- UK.mapdata %>% dplyr::group_by(id) %>%
+  dplyr::summarise(mean.lat=mean(lat), mean.long=median(long)) %>%
+  dplyr::ungroup()
+colnames(UK.mapdata.regions.meancoords)[1] <- "phe_centre"
+
+PHE.region.GPS.ukmap <- dplyr::left_join(PHE.region.GPS, UK.mapdata.regions.meancoords, by="phe_centre")
+
+# Add artificial location for 'not known'
+PHE.region.GPS.ukmap[PHE.region.GPS.ukmap$phe_centre=="Not Known","mean.lat"] <- 600000
+PHE.region.GPS.ukmap[PHE.region.GPS.ukmap$phe_centre=="Not Known","mean.long"] <- 550000
+
+# Shift "South East" slightly to reduce the overlap with London
+PHE.region.GPS.ukmap[PHE.region.GPS.ukmap$phe_centre=="South East","mean.long"] <- 475000
+# Shift "East of England East" slightly to reduce the overlap with London 
+PHE.region.GPS.ukmap[PHE.region.GPS.ukmap$phe_centre=="East of England","mean.lat"] <- 275000
+
+# Not going to try plotting the 2 samples from elsewhere in the UK, so remove that row
+PHE.region.GPS.ukmap <- PHE.region.GPS.ukmap[PHE.region.GPS.ukmap$phe_centre != "UK (not England)",]
+
+# Create radius variable for plotting pie sizes (use log10(n)*20,000)
+PHE.region.GPS.ukmap$radius.UK <- log10(PHE.region.GPS.ukmap$Region_Count)*20000
+
+#PHE.geo.count.years.lineage
+
+UK.gg.scatterpie <- UK.gg + geom_scatterpie(data=PHE.region.GPS.ukmap, aes(mean.long, mean.lat, group=phe_centre, r=radius.UK), alpha=0.85, color=NA, cols=c("Nichols","SS14")) + 
+  scale_fill_manual(name="TPA\nLineage",values=TPA_Lineage.cols$Lineage.col, breaks=TPA_Lineage.cols$Lineage) + theme(legend.position="top")
+
+UK.gg.scatterpie <- UK.gg.scatterpie + geom_scatterpie_legend(PHE.region.GPS.ukmap[!is.na(PHE.region.GPS.ukmap$mean.lat),"radius.UK"], labeller=function(x) round((10^(x/20000)),0), n=3, x=150000, y=500000)
+
+UK.gg.scatterpie <- UK.gg.scatterpie + theme_nothing()
+
+#? Add labels
+UK.gg.scatterpie.labs <- UK.gg.scatterpie + geom_label_repel(data=PHE.region.GPS.ukmap[!is.na(PHE.region.GPS.ukmap$mean.lat),], aes(mean.long, mean.lat, label=phe_centre), size=theme.text.size.within, nudge_x = 50000, nudge_y = -25000, segment.size  = 0.1) + theme(legend.key.size = unit(0.55,"line"), legend.position="bottom") + 
+  theme.text.size +
+  theme_nothing()
+
+UK.gg.scatterpie.labs
+```
+\
+\
+Now do an equivalent plot for sublineages
+```{r}
+PHE.region.GPS.ukmap.sublin <- PHE.region.GPS.ukmap
+
+
+PHE.region.GPS.ukmap.sublin <- left_join(PHE.region.GPS.ukmap.sublin, PHE.geo.sublineage[PHE.geo.sublineage$TPA.pinecone.sublineage=="1",c("phe_centre","Count")], by="phe_centre")
+colnames(PHE.region.GPS.ukmap.sublin)[11] <- "1"
+PHE.region.GPS.ukmap.sublin <- left_join(PHE.region.GPS.ukmap.sublin, PHE.geo.sublineage[PHE.geo.sublineage$TPA.pinecone.sublineage=="2",c("phe_centre","Count")], by="phe_centre")
+colnames(PHE.region.GPS.ukmap.sublin)[12] <- "2"
+PHE.region.GPS.ukmap.sublin <- left_join(PHE.region.GPS.ukmap.sublin, PHE.geo.sublineage[PHE.geo.sublineage$TPA.pinecone.sublineage=="3",c("phe_centre","Count")], by="phe_centre")
+colnames(PHE.region.GPS.ukmap.sublin)[13] <- "3"
+PHE.region.GPS.ukmap.sublin <- left_join(PHE.region.GPS.ukmap.sublin, PHE.geo.sublineage[PHE.geo.sublineage$TPA.pinecone.sublineage=="6",c("phe_centre","Count")], by="phe_centre")
+colnames(PHE.region.GPS.ukmap.sublin)[14] <- "6"
+PHE.region.GPS.ukmap.sublin <- left_join(PHE.region.GPS.ukmap.sublin, PHE.geo.sublineage[PHE.geo.sublineage$TPA.pinecone.sublineage=="8",c("phe_centre","Count")], by="phe_centre")
+colnames(PHE.region.GPS.ukmap.sublin)[15] <- "8"
+PHE.region.GPS.ukmap.sublin <- left_join(PHE.region.GPS.ukmap.sublin, PHE.geo.sublineage[PHE.geo.sublineage$TPA.pinecone.sublineage=="14",c("phe_centre","Count")], by="phe_centre")
+colnames(PHE.region.GPS.ukmap.sublin)[16] <- "14"
+PHE.region.GPS.ukmap.sublin <- left_join(PHE.region.GPS.ukmap.sublin, PHE.geo.sublineage[PHE.geo.sublineage$TPA.pinecone.sublineage=="15",c("phe_centre","Count")], by="phe_centre")
+colnames(PHE.region.GPS.ukmap.sublin)[17] <- "15"
+PHE.region.GPS.ukmap.sublin <- left_join(PHE.region.GPS.ukmap.sublin, PHE.geo.sublineage[PHE.geo.sublineage$TPA.pinecone.sublineage=="16",c("phe_centre","Count")], by="phe_centre")
+colnames(PHE.region.GPS.ukmap.sublin)[18] <- "16"
+PHE.region.GPS.ukmap.sublin <- left_join(PHE.region.GPS.ukmap.sublin, PHE.geo.sublineage[PHE.geo.sublineage$TPA.pinecone.sublineage=="Singleton",c("phe_centre","Count")], by="phe_centre")
+colnames(PHE.region.GPS.ukmap.sublin)[19] <- "Singleton"
+PHE.region.GPS.ukmap.sublin[is.na(PHE.region.GPS.ukmap.sublin)] <- 0
+
+# Most samples are either sublineage 1 or 14. Let's create a count of samples that are neither.
+PHE.region.GPS.ukmap.sublin$`Other Sublineages` <- sapply(1:nrow(PHE.region.GPS.ukmap.sublin), function (x) PHE.region.GPS.ukmap.sublin$Region_Count[x]-sum(PHE.region.GPS.ukmap.sublin$`1`[x], PHE.region.GPS.ukmap.sublin$`14`[x])) 
+
+
+
+UK.gg.scatterpie.sublineage <- UK.gg + geom_scatterpie(data=PHE.region.GPS.ukmap.sublin[PHE.region.GPS.ukmap.sublin$mean.long!=0,], aes(mean.long, mean.lat, group=phe_centre, r=radius.UK), alpha=0.85, color=NA, cols=c("1","14","Other Sublineages")) + 
+  scale_fill_manual(name="TPA\nSublineage",values=c("#FC9272","#BCBDDC", "grey50"), breaks=c("1","14","Other Sublineages"))
+
+# add legend
+UK.gg.scatterpie.sublineage <- UK.gg.scatterpie.sublineage + geom_scatterpie_legend(PHE.region.GPS.ukmap[!is.na(PHE.region.GPS.ukmap$mean.lat),"radius.UK"], labeller=function(x) round((10^(x/20000)),0), n=3, x=150000, y=500000)
+
+#UK.gg.scatterpie <- UK.gg.scatterpie + x.theme.strip + y.theme.strip
+UK.gg.scatterpie.sublineage <- UK.gg.scatterpie.sublineage + theme_nothing()
+
+#? Add labels
+UK.gg.scatterpie.sublineage <- UK.gg.scatterpie.sublineage + geom_label_repel(data=PHE.region.GPS.ukmap[!is.na(PHE.region.GPS.ukmap$mean.lat),], aes(mean.long, mean.lat, label=phe_centre), size=theme.text.size.within, nudge_x = 50000, nudge_y = -25000, segment.size  = 0.1) +
+  theme(legend.key.size = unit(0.55,"line"), legend.position="bottom") + 
+  theme.text.size +
+  theme_nothing()
+
+
+UK.gg.scatterpie.sublineage
+```
+
+\
+Combined map plot
+```{r}
+UK.gg.scatterpie.combi <- plot_grid(UK.gg.scatterpie.labs, UK.gg.scatterpie.sublineage, ncol=2, labels = c("A","B"), label_size=panel.lab.size)
+
+UK.gg.scatterpie.combi
+```
+\
+\
+Plot in combination with barplots
+```{r, fig.height=8, fig.width=8}
+plot_grid(UK.gg.scatterpie.combi, PHE.region.combiplot.2.lineages, nrow=2, rel_heights=c(4,5))
+
+#ggsave(paste0(Figure_output_directory,"Fig2_TPA-PHE_Map-Lineage+Barplots.",format(Sys.Date(),"%Y%m%d"),".pdf"), units='mm', width=190, height=185, device='pdf', dpi=1200)
+```
+\
+\
+### Analysis by sublineage
+\
+Now lets start exploring how samples are distributed by sublineage
+
+```{r}
+PHE.metadata.linked <- PHE.metadata.linked
+PHE.metadata.linked$TPA.pinecone.sublineage <- factor(PHE.metadata.linked$TPA.pinecone.sublineage, levels=rev(as.character(sort(unique(PHE.metadata.linked$TPA.pinecone.sublineage)))))
+
+PHE.Lineage.count <- PHE.metadata.linked %>% 
+  dplyr::group_by(TPA_Lineage) %>%
+  dplyr::summarise(Count=n()) %>%
+  dplyr::mutate(total=sum(Count), perc=(Count/total)*100)
+
+PHE.sublin.count <- PHE.metadata.linked %>% 
+  dplyr::group_by(TPA.pinecone.sublineage) %>%
+  dplyr::summarise(Count=n()) %>%
+  dplyr::mutate(total=sum(Count), perc=(Count/total)*100)
+
+PHE.geo.sublin.years <- PHE.metadata.linked %>% 
+  dplyr::group_by(TPA.pinecone.sublineage,year) %>%
+  dplyr::summarise(Count=n())
+
+
+## Generate some stats about sublineage groups
+
+# Generate some stats about gender orientation
+PHE.sublineage.orientation.counts <- PHE.metadata.linked %>% 
+  dplyr::group_by(TPA.pinecone.sublineage,gender_orientation) %>%
+  dplyr::summarise(Count=n()) %>%
+  dplyr::mutate(total.sublin=sum(Count)) %>%
+  dplyr::arrange(desc(gender_orientation), .by_group=T) %>%
+  dplyr::mutate(fraction=Count/total.sublin, cum_fract=cumsum(fraction), cum_fract.mid = cum_fract-(fraction/2))
+
+
+# Generate some stats about UK born
+PHE.sublineage.UKborn <- PHE.metadata.linked %>% 
+  dplyr::group_by(TPA.pinecone.sublineage, ukborn) %>%
+  dplyr::summarise(Count=n()) %>%
+  dplyr::mutate(total.sublin=sum(Count)) %>%
+  #dplyr::arrange(desc(ukborn), .by_group=T) %>%
+  dplyr::arrange(desc(ukborn), .by_group=T) %>%
+  dplyr::mutate(fraction=Count/total.sublin, cum_fract=cumsum(fraction), cum_fract.mid = cum_fract-(fraction/2))
+  
+# Generate some stats about London based
+PHE.sublineage.London <- PHE.metadata.linked %>% 
+  dplyr::group_by(TPA.pinecone.sublineage, london) %>%
+  dplyr::summarise(Count=n()) %>%
+  dplyr::mutate(total.sublin=sum(Count)) %>%
+  dplyr::arrange(desc(london), .by_group=T) %>%
+  dplyr::mutate(fraction=Count/total.sublin, cum_fract=cumsum(fraction), cum_fract.mid = cum_fract-(fraction/2))
+
+# Generate some stats about Age group
+PHE.sublineage.Age <- PHE.metadata.linked %>% 
+  dplyr::group_by(TPA.pinecone.sublineage, age_group) %>%
+  dplyr::summarise(Count=n()) %>%
+  dplyr::mutate(total.sublin=sum(Count)) %>%
+  dplyr::arrange(desc(age_group), .by_group=T) %>%
+  dplyr::mutate(fraction=Count/total.sublin, cum_fract=cumsum(fraction), cum_fract.mid = cum_fract-(fraction/2))
+
+# Generate some stats about HIV group
+PHE.sublineage.HIV <- PHE.metadata.linked %>% 
+  dplyr::group_by(TPA.pinecone.sublineage, hivpos) %>%
+  dplyr::summarise(Count=n()) %>%
+  dplyr::mutate(total.sublin=sum(Count)) %>%
+  dplyr::arrange(desc(hivpos), .by_group=T) %>%
+  dplyr::mutate(fraction=Count/total.sublin, cum_fract=cumsum(fraction), cum_fract.mid = cum_fract-(fraction/2))
+
+# Generate some stats by PHE Region
+PHE.sublineage.PHEcentre <- PHE.metadata.linked %>% 
+  dplyr::group_by(TPA.pinecone.sublineage, phe_centre) %>%
+  dplyr::summarise(Count=n()) %>%
+  dplyr::mutate(total.sublin=sum(Count)) %>%
+  dplyr::arrange(desc(phe_centre), .by_group=T) %>%
+  dplyr::mutate(fraction=Count/total.sublin, cum_fract=cumsum(fraction), cum_fract.mid = cum_fract-(fraction/2))
+
+```
+
+\
+Plot by sublineage
+```{r}
+p.sublineage.year.bubbleplot <- ggplot(PHE.geo.sublin.years, aes(as.numeric(year), TPA.pinecone.sublineage, colour=TPA.pinecone.sublineage)) +
+  geom_point(alpha=0.65, aes(size=Count)) + 
+  geom_line(alpha=0.25) +
+  guides(colour='none') +
+  scale_size_area(max_size = 7,breaks=c(1,5,10,25,50)) + 
+  guides(size=guide_legend(nrow=2, direction = 'horizontal', byrow=T)) +
+  theme_light() +
+  scale_color_manual(name="TPA\nSublineage",values=sublineages.cols.brew$sublineage.cols, breaks=sublineages.cols.brew$sublineage) +
+  theme.text.size + theme(legend.key.size = unit(0.55,"line"),legend.position='bottom') +
+  labs(y="TPA Sublineage", x="Sample Year", size="Count") 
+#p.sublineage.year.bubbleplot
+
+p.sublineage.hbarplot <- ggplot(PHE.sublin.count, aes(Count,TPA.pinecone.sublineage,fill=TPA.pinecone.sublineage)) +
+  geom_barh(stat="identity", position="stack", width=0.65) +
+  theme_light() +
+  theme.text.size + theme(legend.key.size = unit(0.55,"line"),legend.position='bottom') +
+  scale_fill_manual(name="TPA\nSublineage",values=sublineages.cols.brew$sublineage.cols, breaks=sublineages.cols.brew$sublineage) +
+  labs(y="TPA Sublineage", x="Sample Count") +
+  geom_text(data=PHE.sublin.count, aes((Count+12), TPA.pinecone.sublineage,label=Count), size=theme.text.size.within, inherit.aes = F) +
+  #coord_cartesian(xlim=c(0,200)) +
+  coord_cartesian(xlim=c(0,260)) +
+  guides(fill=guide_legend(ncol=2))
+#p.sublineage.hbarplot 
+
+p.sublineage.orientation.hbarplot <- ggplot(PHE.sublineage.orientation.counts, aes(y=TPA.pinecone.sublineage,x=Count,fill=gender_orientation)) +
+  geom_barh(stat="identity", position="fill", width=0.65) +
+  theme_light() +
+  theme.text.size + theme(legend.key.size = unit(0.55,"line"),legend.position='bottom') +
+  scale_fill_manual(name="Orientation",values=PHE.orientation.cols$orientation.cols, breaks=PHE.orientation.cols$orientation) +
+  labs(y="TPA Sublineage", x="Orientation") +
+  guides(fill=guide_legend(ncol=1)) +
+  geom_text(data=PHE.sublineage.orientation.counts, aes(cum_fract.mid, TPA.pinecone.sublineage,label=Count), size=theme.text.size.within, inherit.aes = F)
+#p.region.orientation.hbarplot
+
+p.sublineage.hiv.hbarplot <- ggplot(PHE.sublineage.HIV, aes(y=TPA.pinecone.sublineage, x=Count,fill=hivpos)) +
+  geom_barh(stat="identity", position="fill", width=0.65) +
+  theme_light() +
+  theme.text.size + theme(legend.key.size = unit(0.55,"line"),legend.position='bottom') +
+  scale_fill_manual(name="HIV +ve",values=PHE.hiv.cols$hiv.cols, breaks=PHE.hiv.cols$hivpos) +
+  labs(y="TPA Sublineage", x="HIV +ve") +
+  guides(fill=guide_legend(ncol=1)) + 
+  geom_text(data=PHE.sublineage.HIV, aes(cum_fract.mid, TPA.pinecone.sublineage,label=Count), size=theme.text.size.within, inherit.aes = F)
+#p.sublineage.hiv.hbarplot
+
+p.sublineage.ukborn.hbarplot <- ggplot(PHE.sublineage.UKborn, aes(y=TPA.pinecone.sublineage,x=Count,fill=ukborn)) +
+  geom_barh(stat="identity", position="fill", width=0.65) +
+  theme_light() +
+  theme.text.size + theme(legend.key.size = unit(0.55,"line"),legend.position='bottom') +
+  scale_fill_manual(name="UK\nborn",values=PHE.ukborn.cols$ukborn.cols, breaks=PHE.ukborn.cols$ukborn) +
+  labs(y="TPA Sublineage", x="UK born") +
+  guides(fill=guide_legend(nrow=3)) +
+  geom_text(data=PHE.sublineage.UKborn, aes(cum_fract.mid, TPA.pinecone.sublineage,label=Count), size=theme.text.size.within, inherit.aes = F)
+#p.sublineage.ukborn.hbarplot
+
+p.sublineage.Age.hbarplot <- ggplot(PHE.sublineage.Age, aes(y=TPA.pinecone.sublineage, x=Count ,fill=age_group)) +
+  geom_barh(stat="identity", position="fill", width=0.65) +
+  theme_light() +
+  theme.text.size + theme(legend.key.size = unit(0.55,"line"),legend.position='bottom') +
+  scale_fill_manual(name="Age\nGroup",values=PHE.Age.cols$age_group.cols, breaks=PHE.Age.cols$age_group) +
+  labs(y="TPA Sublineage", x="Age Group") +
+  guides(fill=guide_legend(ncol=1)) +
+  geom_text(data=PHE.sublineage.Age, aes(cum_fract.mid, TPA.pinecone.sublineage,label=Count), size=theme.text.size.within, inherit.aes = F)
+#p.sublineage.Age.hbarplot
+
+
+p.sublineage.PHEregion.hbarplot <- ggplot(PHE.sublineage.PHEcentre, aes(y=TPA.pinecone.sublineage, x=Count, fill=phe_centre)) +
+  geom_barh(stat="identity", position="fill", width=0.65) +
+  theme_light() +
+  theme.text.size + theme(legend.key.size = unit(0.55,"line"),legend.position='bottom') +
+  scale_fill_manual(name="UKHSA\nRegion",values=PHE.region.cols.brew$region.col, breaks=PHE.region.cols.brew$PHE.region) +
+  labs(y="TPA Sublineage", x="UKHSA Region") +
+  guides(fill=guide_legend(nrow=4)) +
+  geom_text(data=PHE.sublineage.PHEcentre, aes(cum_fract.mid, TPA.pinecone.sublineage,label=Count), size=theme.text.size.within, inherit.aes = F)
+
+```
+\
+Look at how sublineages are distributed by region (sublineage-centric)
+```{r}
+p.sublineage.PHEregion.hbarplot
+```
+
+\
+Combine patient metadata into a plot
+```{r, fig.width=12, fig.height=10}
+#PHE.sublineages.combiplot.1 <- plot_grid(p.sublineage.year.bubbleplot, p.sublineage.hbarplot + y.theme.strip, p.sublineage.orientation.hbarplot + y.theme.strip, p.sublineage.hiv.hbarplot + y.theme.strip, p.sublineage.PHEregion.hbarplot + y.theme.strip, p.sublineage.ukborn.hbarplot + y.theme.strip, p.sublineage.Age.hbarplot + y.theme.strip, nrow=1, align="h", rel_widths=c(3,2,2,2,2,2,2), scale=0.9)
+
+#PHE.sublineages.combiplot.1 <- plot_grid(p.sublineage.year.bubbleplot, p.sublineage.hbarplot + y.theme.strip, p.sublineage.orientation.hbarplot + y.theme.strip, p.sublineage.hiv.hbarplot + y.theme.strip, p.sublineage.Age.hbarplot + y.theme.strip, p.sublineage.PHEregion.hbarplot + y.theme.strip, nrow=1, align="h", rel_widths=c(3,2,2,2,2,4), scale=0.9)
+
+PHE.sublineages.combiplot.1 <- plot_grid(p.sublineage.year.bubbleplot, p.sublineage.hbarplot + y.theme.strip, p.sublineage.orientation.hbarplot + y.theme.strip, p.sublineage.hiv.hbarplot + y.theme.strip, p.sublineage.Age.hbarplot + y.theme.strip, nrow=1, align="h", rel_widths=c(4,2,2,2,2), scale=0.9)
+
+PHE.sublineages.combiplot.1 
+
+```
+
+
+\
+Lets add the 'all' row again to the 'by sublineage' plot
+```{r, fig.height=5, fig.width=12}
+# legends
+PHE.sublineage.combiplot.1.legends <- plot_grid(get_legend(p.sublineage.year.bubbleplot), get_legend(p.sublineage.hbarplot + y.theme.strip), get_legend(p.sublineage.orientation.hbarplot + y.theme.strip), get_legend(p.sublineage.hiv.hbarplot + y.theme.strip), get_legend(p.sublineage.Age.hbarplot + y.theme.strip), nrow=1, align="h", rel_widths=c(6,4,4,4,4), scale=0.95)
+
+# regions
+#PHE.sublineage.combiplot.1.nolegend <- plot_grid(p.sublineage.year.bubbleplot + legend.strip, p.sublineage.hbarplot + y.theme.strip + legend.strip, p.sublineage.orientation.hbarplot + y.theme.strip + legend.strip, p.sublineage.hiv.hbarplot + y.theme.strip + legend.strip, p.sublineage.Age.hbarplot + y.theme.strip + legend.strip, nrow=1, align="h", rel_widths=c(4,2,2,2,2), scale=0.9)
+
+# Or do it vertically
+p.sublineage.year.bubbleplot.combi <- plot_grid(p.all.year.bubbleplot + x.theme.strip, p.sublineage.year.bubbleplot + legend.strip, ncol=1, align="v",axis="lr", rel_heights=c(1,7))
+
+p.sublineage.hbar.counts.combi <- plot_grid(p.all.hbarplot + x.theme.strip + y.theme.strip, p.sublineage.hbarplot + y.theme.strip + legend.strip, ncol=1, align="v",axis="lr", rel_heights=c(1,7))
+
+p.sublineage.hbar.orientation.combi <- plot_grid(p.all.orientation.hbarplot + x.theme.strip + y.theme.strip, p.sublineage.orientation.hbarplot + y.theme.strip + legend.strip, ncol=1, align="v",axis="lr", rel_heights=c(1,7))
+
+p.sublineage.hbar.hiv.combi <- plot_grid(p.all.hiv.hbarplot + x.theme.strip + y.theme.strip, p.sublineage.hiv.hbarplot + y.theme.strip + legend.strip, ncol=1, align="v",axis="lr", rel_heights=c(1,7))
+
+p.sublineage.hbar.Age.combi <- plot_grid(p.all.Age.hbarplot + x.theme.strip + y.theme.strip, p.sublineage.Age.hbarplot + y.theme.strip + legend.strip, ncol=1, align="v",axis="lr", rel_heights=c(1,7))
+
+# Combine the plots
+p.sublineage.hbar.combi.plus.all <- plot_grid(p.sublineage.year.bubbleplot.combi, p.sublineage.hbar.counts.combi, p.sublineage.hbar.orientation.combi, p.sublineage.hbar.hiv.combi, p.sublineage.hbar.Age.combi, nrow=1, rel_widths=c(7,3,4,4,4), labels=c("A", "B", "C", "D", "E"),label_size=panel.lab.size, vjust=1, scale=0.99)
+
+# and add the legends on top
+#p.sublineage.hbar.combi.plus.all.with.legends <- plot_grid(PHE.sublineage.combiplot.1.legends, p.sublineage.hbar.combi.plus.all, ncol=1, rel_heights=c(1,9))
+
+# legends below
+p.sublineage.hbar.combi.plus.all.with.legends <- plot_grid(p.sublineage.hbar.combi.plus.all, PHE.sublineage.combiplot.1.legends, ncol=1, rel_heights=c(8,1))
+
+
+p.sublineage.hbar.combi.plus.all.with.legends
+
+```
+
+\
+\ 
+These patterns look fairly similar between sublineages, and (apart from 1 & 14) the groups are very small. However, sublineage 14 does appear to have a higher proportion of MSM compared to sublineage 1 and others. Let's test that formally using 2x2 fisher's tests
+\
+```{r}
+PHE.MSM.counts.all <- PHE.metadata.linked %>% 
+  dplyr::group_by(is.MSM, .drop=F) %>%
+  dplyr::summarise(Count=n()) %>%
+  dplyr::mutate(total.sublin=sum(Count)) %>%
+  dplyr::arrange((is.MSM), .by_group=T) %>%
+  dplyr::mutate(fraction=Count/total.sublin, cum_fract=cumsum(fraction), cum_fract.mid = cum_fract-(fraction/2))
+
+PHE.sublineage.MSM.counts <- PHE.metadata.linked %>% 
+  dplyr::group_by(TPA.pinecone.sublineage,is.MSM, .drop=F) %>%
+  dplyr::summarise(Count=n()) %>%
+  dplyr::mutate(total.sublin=sum(Count)) %>%
+  dplyr::arrange((is.MSM), .by_group=T) %>%
+  dplyr::mutate(fraction=Count/total.sublin, cum_fract=cumsum(fraction), cum_fract.mid = cum_fract-(fraction/2)) #%>%
+  #dplyr::filter(!is.na(is.MSM))
+
+
+PHE.sublineage.MSM.counts.wider <- PHE.sublineage.MSM.counts %>% dplyr::select(TPA.pinecone.sublineage, is.MSM, Count) %>%
+  tidyr::pivot_wider(names_from = is.MSM, values_from=Count) %>%
+  dplyr::mutate(MSM=replace_na(MSM, 0), Other=replace_na(Other, 0), Total=sum(MSM,Other)) %>%
+  #dplyr::select(-`NA`) %>%
+  dplyr::filter(Total!=0)
+  
+
+PHE.sublineage.MSM.pval <- data.frame(TPA.pinecone.sublineage=PHE.sublineage.MSM.counts.wider$TPA.pinecone.sublineage, p.fisher=sapply(1:nrow(PHE.sublineage.MSM.counts.wider), function (x) fisher.test(matrix(as.numeric(c(PHE.sublineage.MSM.counts.wider[x,"MSM"],
+                                PHE.sublineage.MSM.counts.wider[x,"Other"],
+                                PHE.MSM.counts.all[PHE.MSM.counts.all$is.MSM=="MSM","Count"], PHE.MSM.counts.all[PHE.MSM.counts.all$is.MSM=="Other","Count"])),nrow=2))[[1]]), stringsAsFactors=F)
+
+PHE.sublineage.MSM.counts.wider <- dplyr::left_join(PHE.sublineage.MSM.counts.wider, PHE.sublineage.MSM.pval, by="TPA.pinecone.sublineage")
+
+PHE.sublineage.MSM.counts.wider
+```
+
+
+\
+\
+### Visualisation of UK genomic relationships
+\
+Ok, let's make a tree for displaying these relationships using the UK dataset only
+\
+From some experimentation, a 'GrapeTree' minimum spanning network works well for visualising the clonality of these populations. We can use a SNP-scaled phylogeny as direct input to GrapeTree, and this will allow branches to be scaled appropriately. However, although annotation is allowed within the GrapeTree software, colours must be manually edited. Final GrapeTree plots can then be imported back into R for combining with other plots. 
+\
+
+Alternative visualisations - grapetree?
+\
+Take the 526-global phylogeny (snp-scaled version from pyjar), and prune to only include the UK strains from this study - this ensures the topology is consistent accross studies. 
+```{r}
+
+TPA.pyjar.tree.subset.uk <- ape::keep.tip(TPA.pyjar.tree, as.character(unlist(PHE.metadata.linked[PHE.metadata.linked$Geo_Country=="UK","Sample_Name"])))
+
+ggtree(TPA.pyjar.tree.subset.uk)
+#write.tree(TPA.pyjar.tree.subset.uk, paste0(Data_input_directory,"TPA.UK-only.pyjar.2022-02-03.tre"))
+
+# Write out a metadata sheet for the relevant information
+PHE.metadata.linked.grapetree <- PHE.metadata.linked[,c("Sample_Name", "year","gender_orientation","phe_centre","hivpos","ukborn","TPA_Lineage","TPA.pinecone.sublineage")]
+colnames(PHE.metadata.linked.grapetree)[1] <- "ID"
+
+#write.table(PHE.metadata.linked.grapetree, paste0(Data_input_directory,"TPA.UK-only.grapetree.meta.2022-02-03.tsv"), sep = "\t", quote=F, row.names = F)
+```
+\
+Tree independently visualised and annotated using GrapeTree.
+\
+Now import and integrate GrapeTree plot with metadata plots.
+```{r, fig.height=8, fig.width=10}
+# Combine the plots
+p.sublineage.hbar.combi.plus.all.B2F <- plot_grid(p.sublineage.year.bubbleplot.combi, p.sublineage.hbar.counts.combi, p.sublineage.hbar.orientation.combi, p.sublineage.hbar.hiv.combi, p.sublineage.hbar.Age.combi, nrow=1, rel_widths=c(7,4,4,4,4), labels=c("B", "C", "D", "E", "F"),label_size=panel.lab.size, vjust=1, scale=0.97)
+
+# legends below
+p.sublineage.hbar.combi.plus.all.with.legends.B2F <- plot_grid(p.sublineage.hbar.combi.plus.all.B2F, PHE.sublineage.combiplot.1.legends, ncol=1, rel_heights=c(7,1))
+
+#p.sublineage.hbar.combi.plus.all.with.legends.B2F
+
+
+# Now bring in externally plotted Grapetree
+p.TPA.UK.Grapetree.sublineages <- ggdraw() + draw_image(TPA.UK.Grapetree.sublineages.file)
+p.TPA.UK.Grapetree.sublineages
+
+p.sublineage.hbar.combi.plus.all.with.legends.B2F.with.grapetree <- plot_grid(p.TPA.UK.Grapetree.sublineages, p.sublineage.hbar.combi.plus.all.with.legends.B2F, ncol=1, labels=c("A",""), label_size=panel.lab.size, rel_heights=c(3,5)) 
+
+
+p.sublineage.hbar.combi.plus.all.with.legends.B2F.with.grapetree
+#ggsave(paste0(Figure_output_directory, "Fig1_TPA-PHE_Sample-distros-sublineage.",format(Sys.Date(),"%Y%m%d"),".pdf"), units='mm', width=190, height=185, device='pdf', dpi=1200)
+```
+
+\
+Manage other GrapeTree plots (for consistency)
+
+TPA-UK-2022-02-16.-MSTree_3-way-figure.Inscaped-2
+```{r}
+# Bring in 3-way graphetree plot (3 different metadata variables using the same input tree)
+TPA.UK.Grapetree.3way <- ggdraw() + draw_image(TPA.UK.Grapetree.3way.file)
+TPA.UK.Grapetree.3way
+
+#ggsave(paste0(Figure_output_directory, "SupFig4_TPA-PHE_Grapetree-3ways.",format(Sys.Date(),"%Y%m%d"),".pdf"), units='mm', width=145, height=180, device='pdf', dpi=1200)
+
+```
+
+\
+And also do the HIV status plot
+```{r}
+
+TPA.UK.Grapetree.HIV <- ggdraw() + draw_image(TPA.UK.Grapetree.HIV.file)
+TPA.UK.Grapetree.HIV
+
+#ggsave(paste0(Figure_output_directory, "SupFig5_TPA-PHE_Grapetree-HIV.",format(Sys.Date(),"%Y%m%d"),".pdf"), units='mm', width=185, height=110, device='pdf', dpi=1200)
+
+```
+
+
+
+\
+\
+### Phylogenetic context analyses
+\
+Ok, now lets look at some trees
+\
+First, let's formalise BEAST tree plotting as three separate functions to enable other trees to be plotted the same way
+\
+```{r}
+full.beast2.tree <- read.beast(full.beast2.tree.file)
+full.beast2.tree@phylo$tip.label <- gsub("\\|.+$","",full.beast2.tree@phylo$tip.label, perl=T)
+
+################################################################################################
+# function to extract a tree based on sublineage
+Extract_sublineage_tree_for_plot <- function(my.beast.tree, my.metadata, my.phe.meta, my.sublineage){
+  # get all tips to include from metadata, then calculate MRCA from tree
+  sublineage.test.mrca <- getMRCA(my.beast.tree@phylo, as.character(unlist(my.metadata[my.metadata$TPA.pinecone.sublineage==my.sublineage,"Sample_Name"])))
+  ######
+  TPA.beast.subtree.test <- tree_subset(my.beast.tree, node=sublineage.test.mrca, levels_back=0)
+  return(TPA.beast.subtree.test)
+}
+#Extract_sublineage_tree_for_plot(full.beast2.tree, TPA.meta2.1, PHE.metadata.linked, my.sublineage = 1)
+################################################################################################
+
+
+################################################################################################
+# Function to prepare a beast tree with timescale indicators, posterior support and 95% HPD bars
+plot_beast_subtree_with_HPD <- function(my.beast.tree, my.metadata, my.phe.meta, mrsd.fulltree){
+  # get MRCD for tree
+  mrsd.Beast.tree.test.s <- max(as.numeric(unlist(my.metadata[my.metadata$Sample_Name %in% my.beast.tree@phylo$tip.label,"Sample_Year"])))
+  mrsd.Beast.tree.test <- lubridate::ymd(paste0(mrsd.Beast.tree.test.s,"-06-01")) 
+  mrsd.Beast.tree.fulltree <- lubridate::ymd(mrsd.fulltree) 
+  #mrsd.Beast.tree.test
+  # plot basic tree
+  options(ignore.negative.edge=TRUE)
+  p.TPA.beast.subtree.test <- ggtree(my.beast.tree, mrsd=mrsd.Beast.tree.test, ladderize = T, size=0.4) + scale_x_continuous(breaks=seq(1960,2020,10), minor_breaks=seq(2000, 2020, 1)) +
+    theme_tree2() +
+    # Add date lines for easy interpretation  
+    theme(panel.grid.major   = element_line(color="grey50", size=.2),
+          panel.grid.minor   = element_line(color="grey85", size=.2),
+          panel.grid.major.y = element_blank(),
+          panel.grid.minor.y = element_blank())
+  # Add posterior support as node points
+  p.TPA.beast.subtree.test <- p.TPA.beast.subtree.test + geom_point2(aes(subset=(!isTip & as.numeric(posterior)>0.8)),color="gray60",size=2,alpha=0.5, shape=18) + 
+    geom_point2(aes(subset=(!isTip & as.numeric(posterior)>0.91)),color="gray40",size=3,shape=18,alpha=0.5) + 
+    geom_point2(aes(subset=(!isTip & as.numeric(posterior)>=0.96)),color="black",size=3,shape=18,alpha=0.5)
+  ######
+  # extract 95% HPD intervals - geom_range seems unable to do correctly with this tree (known bug for tip dated trees), so extract data and plot using geom_segment
+  TPA.beast.subtree.test.data <- fortify(my.beast.tree)
+  minmax <- t(matrix(unlist(TPA.beast.subtree.test.data[!is.na(TPA.beast.subtree.test.data$height_0.95_HPD),"height_0.95_HPD"]),nrow=2))
+  bar_df <- data.frame(node_id=TPA.beast.subtree.test.data[!is.na(TPA.beast.subtree.test.data$height_0.95_HPD),"node"],as.data.frame(minmax))
+  names(bar_df) <- c('node_id','min','max') 
+  bar_df <- bar_df %>% filter(node_id > Ntip(my.beast.tree@phylo))
+  bar_df <- bar_df %>% left_join(TPA.beast.subtree.test.data, by=c('node_id'='node')) #%>% select(node_id,min,max,y)
+  #mrcd.decimal <- decimal_date(mrsd.Beast.tree.test)
+  mrcd.decimal <- decimal_date(mrsd.Beast.tree.fulltree)
+  
+  # Now add HPDs to plot
+  p.TPA.beast.subtree.test <- p.TPA.beast.subtree.test + geom_segment(aes(x=mrcd.decimal-max, y=y, xend=mrcd.decimal-min, yend=y), data=bar_df, color='red', alpha=0.2, size=2.0)
+  # Output tree 
+  return(p.TPA.beast.subtree.test)
+}
+################################################################################################
+
+
+################################################################################################
+# Function to add metadata to tree
+# Has two optional arguments "initial.track.offset" and "track.scaling" which can be used to alter the width and positioning of metadata tracks
+
+plot_beast_subtree_with_PHE_metadata <- function(my.beast.tree.input, my.metadata, my.phe.meta, initial.track.offset, track.scaling){
+    # Add code to allow scaling up of the track offsets and widths - useful for much bigger length trees
+  if(missing(initial.track.offset)){
+    initial.track.offset <- 0
+  }    
+  if(missing(track.scaling)){
+    track.scaling <- 1
+  }
+  # Calculate amount to offset each heatmap track
+  offset.dist <- 4*track.scaling
+  track.width <- (1/max(my.beast.tree.input$data$height)*3)*track.scaling
+  
+  # make a list of taxa used in this plot 
+  my.taxa.list <- as.character(unlist(filter(my.beast.tree.input$data, isTip==TRUE) %>% select(label)))
+  
+  # make a color scale for sampling years
+  #PHE.sublintest.year.cols <- data.frame(year=sort(unique(as.numeric(unlist(my.metadata[(my.metadata$Sample_Name %in% my.taxa.list),"Sample_Year"],use.names=F)))),stringsAsFactors = T)
+  #PHE.sublintest.year.cols$year.cols <- colorRampPalette(brewer.pal(7, "YlOrRd"))(nrow(PHE.sublintest.year.cols))
+  
+  # Or alternatively, use a common colour scheme for all data (maybe more sensible)
+  PHE.sublintest.year.cols <- data.frame(year=TPA.year.cuttoff.cols$date.cuttoff, year.cols=TPA.year.cuttoff.cols$date.cuttoff.col, stringsAsFactors = F)
+  
+  # make metadata file for UK regions present in sublineage
+  sublin.test.region.meta <- data.frame(row.names=as.character(unlist(my.phe.meta[my.phe.meta$Sample_Name %in% my.taxa.list,"Sample_Name"])), Region=as.character(unlist(my.phe.meta[my.phe.meta$Sample_Name %in% my.taxa.list,"phe_centre"])), stringsAsFactors = F)
+  
+  # Add heatmap strips
+  # Sample Year
+  #TPA.beast.subtree.test.global.plot1.regional <- gheatmap(my.beast.tree.input, TPA.rawseq.all.Years.p, color=NULL,width=track.width, offset=initial.track.offset+offset.dist,colnames_angle=-45,colnames_offset_y=0.02, hjust=-0.0, font.size=theme.text.size.within) +
+    #scale_fill_manual(name="Year", values=PHE.sublintest.year.cols$year.cols,breaks=PHE.sublintest.year.cols$year, guide = guide_legend(order = 1, ncol=2)) +
+    #ggnewscale::new_scale_fill()
+  TPA.beast.subtree.test.global.plot1.regional <- gheatmap(my.beast.tree.input, TPA.rawseq.year.cuttoff.p, color=NULL,width=track.width, offset=initial.track.offset+offset.dist,colnames_angle=-45,colnames_offset_y=0.02, hjust=-0.0, font.size=theme.text.size.within) +
+    scale_fill_manual(name="Year", values=PHE.sublintest.year.cols$year.cols,breaks=PHE.sublintest.year.cols$year, guide = guide_legend(order = 1, ncol=2)) +
+    ggnewscale::new_scale_fill()
+  
+  # Add country
+  TPA.beast.subtree.test.global.plot1.regional <- gheatmap(TPA.beast.subtree.test.global.plot1.regional, TPA.rawseq.countries.p, color=NULL,width=track.width, offset=initial.track.offset+(offset.dist*2),colnames_angle=-45,colnames_offset_y=0.02, hjust=-0.0, font.size=theme.text.size.within) + 
+    scale_fill_manual(name="Country", values=continental.country.cols.brew2$country.col, breaks=continental.country.cols.brew2$Geo_Country, guide = guide_legend(order = 2)) +
+    ggnewscale::new_scale_fill()
+  # UK or non-UK
+  TPA.beast.subtree.test.global.plot1.regional <- gheatmap(TPA.beast.subtree.test.global.plot1.regional,
+                                                           TPA.rawseq.UK.p, color=NULL,width=track.width,offset=initial.track.offset+(offset.dist*3), colnames_angle=-45,colnames_offset_y=0.02, hjust=-0.0,font.size=theme.text.size.within) + 
+    scale_fill_manual(name="England/Other", breaks=c("England","Other"), values=c("black","grey95"), na.value = "white", guide = guide_legend(order = 3, ncol=2)) +
+    ggnewscale::new_scale_fill()
+  # UK PHE region
+  TPA.beast.subtree.test.global.plot1.regional <- gheatmap(TPA.beast.subtree.test.global.plot1.regional, sublin.test.region.meta, color=NULL,width=track.width, offset=initial.track.offset+(offset.dist*4),colnames_angle=-45,colnames_offset_y=0.02, hjust=-0.0, font.size=theme.text.size.within) + 
+    scale_fill_manual(name="UKHSA Region", values=PHE.region.cols.brew$region.col, breaks=PHE.region.cols.brew$UKHSA.region, na.value = "white", guide = guide_legend(order = 4)) +
+    ggnewscale::new_scale_fill()
+  
+  # TPA sublineage
+  #TPA.beast.subtree.test.global.plot1.regional <- gheatmap(TPA.beast.subtree.test.global.plot1.regional, data.frame(row.names=TPA.meta2.1$Sample_Name, Sublineage=TPA.meta2.1$TPA.pinecone.sublineage, stringsAsFactors = F), color=NULL,width=track.width,offset=initial.track.offset+(offset.dist*5), colnames_angle=-45,colnames_offset_y=0.02, hjust=-0.0,font.size=2.5) + 
+  #scale_fill_manual(name="Sublineage",values=sublineages.cols.brew$sublineage.cols, breaks=sublineages.cols.brew$sublineage, guide = guide_legend(order = 5)) 
+  
+  TPA.beast.subtree.test.global.plot1.regional <- TPA.beast.subtree.test.global.plot1.regional + theme.text.size + theme(legend.key.size = unit(0.55,"line"),legend.position='right') +
+    new_scale_fill() +
+    geom_rootedge(2) +
+    NULL
+  
+  # calculate number of taxa
+  test.taxacount <- length(my.taxa.list)
+  # Adjust final plot x and y axis to make space for labels using taxa counts
+  x.axis.limits <- ggplot_build(TPA.beast.subtree.test.global.plot1.regional)$layout$panel_scales_x[[1]]$range$range
+  TPA.beast.subtree.test.global.plot1.regional <- TPA.beast.subtree.test.global.plot1.regional + 
+    coord_cartesian(y=c(-0.5-(test.taxacount/15),test.taxacount+2), x=c(x.axis.limits[1],x.axis.limits[2]+3))
+  
+  return(TPA.beast.subtree.test.global.plot1.regional)
+}
+################################################################################################
+
+```
+
+\
+Great, now let's plot a full beast tree
+```{r, fig.height=10, fig.width=10}
+# function for x-axis time breaks needs tweaking for the full tree
+TPA.Global.full.BeastTree.ukmeta <- plot_beast_subtree_with_PHE_metadata(plot_beast_subtree_with_HPD(my.beast.tree = full.beast2.tree, my.metadata = TPA.meta2.1, my.phe.meta = PHE.metadata.linked, mrsd.fulltree = "2019-06-01") + scale_x_continuous(breaks=seq(1400,2020,50), minor_breaks=seq(1950, 2020, 5)), my.metadata = TPA.meta2.1, my.phe.meta = PHE.metadata.linked, track.scaling = 5)
+
+TPA.Global.full.BeastTree.ukmeta
+
+#ggsave(paste0(Figure_output_directory,"SupFig7_TPA_FullBeastTree.",format(Sys.Date(),"%Y%m%d"),".pdf"), units='mm', width=185, height=240, device='pdf', dpi=1200)
+```
+
+\
+Now do sublineage plots
+\
+Make some plots
+```{r, warning=FALSE}
+# Sublineage 1
+sublineage.1.tree.heatmap <- plot_beast_subtree_with_PHE_metadata(plot_beast_subtree_with_HPD(Extract_sublineage_tree_for_plot(full.beast2.tree, TPA.meta2.1, PHE.metadata.linked, my.sublineage = 1), TPA.meta2.1, PHE.metadata.linked,"2019-06-01"), TPA.meta2.1, PHE.metadata.linked, track.scaling = 1.2)
+
+# Sublineage.2
+sublineage.2.tree.heatmap <- plot_beast_subtree_with_PHE_metadata(plot_beast_subtree_with_HPD(Extract_sublineage_tree_for_plot(full.beast2.tree, TPA.meta2.1, PHE.metadata.linked, my.sublineage = 2), TPA.meta2.1, PHE.metadata.linked,"2019-06-01"), TPA.meta2.1, PHE.metadata.linked, track.scaling = 1)
+
+# Sublineage.8
+sublineage.8.tree.heatmap <- plot_beast_subtree_with_PHE_metadata(plot_beast_subtree_with_HPD(Extract_sublineage_tree_for_plot(full.beast2.tree, TPA.meta2.1, PHE.metadata.linked, my.sublineage = 8), TPA.meta2.1, PHE.metadata.linked,"2019-06-01"), TPA.meta2.1, PHE.metadata.linked, track.scaling = 1.1)
+
+# Sublineage.14
+sublineage.14.tree.heatmap <- plot_beast_subtree_with_PHE_metadata(plot_beast_subtree_with_HPD(Extract_sublineage_tree_for_plot(full.beast2.tree, TPA.meta2.1, PHE.metadata.linked, my.sublineage = 14), TPA.meta2.1, PHE.metadata.linked,"2019-06-01"), TPA.meta2.1, PHE.metadata.linked, track.scaling = 1.1)
+
+```
+
+\
+Plot together?
+\
+Maybe with sublineage 1 expanded?
+```{r, fig.width=12, fig.height=12}
+p.beast.trees.heatmap.sublineages.combi.offset1 <- plot_grid(sublineage.2.tree.heatmap, 
+          sublineage.8.tree.heatmap, 
+          sublineage.14.tree.heatmap, 
+          ncol=2, labels=c("B - Sublineage 2","C - Sublineage 8","D - Sublineage 14"), label_size=panel.lab.size, scale=0.95, vjust=1.0)
+
+p.beast.trees.heatmap.sublineages.combi.offset2 <- plot_grid(sublineage.1.tree.heatmap, p.beast.trees.heatmap.sublineages.combi.offset1, labels=c("A - Sublineage 1", ""), label_size=panel.lab.size, scale=0.975, ncol=2, rel_widths=c(6,11), vjust=2.5)
+
+
+p.beast.trees.heatmap.sublineages.combi.offset2
+#ggsave(paste0(Figure_output_directory,"SupFig8_TPA-PHE_Sublineage-BeastTrees.",format(Sys.Date(),"%Y%m%d"),".pdf"), units='mm', width=265, height=230, device='pdf', dpi=1200)
+```
+
+\
+Need to explore sublineage 14 a bit more to get dates for those subclades
+```{r}
+sublineage.14.tree.heatmap + geom_tiplab(size=theme.text.size.within, linesize=0.4) #3
+```
+
+\
+```{r}
+# Ok, there are multiple subclades in this tree
+sublineage.14.tree.heatmap.data <- sublineage.14.tree.heatmap$data
+
+# getMRCA(full.beast2.tree@phylo,c("PHE150150A","NL14","TPA_BCC122","TPA_BCC126","PHE140076A","TPA_UKBRG008"))  982
+# full.beast2.tree@phylo$tip.label[phangorn::Descendants(full.beast2.tree@phylo, 982, type = c("tips"))[[1]]]
+
+sublineage.14.lowerclade.list <- c("NL17", "NL19", "PHE140085A", "PHE140089A", "PHE150118A", "PHE150121A", "PHE150133A", "PHE150143A", "PHE150145A", "PHE150162A", "PHE150166A", "PHE150168A", "PHE160224A", "PHE160243A", "PHE160255A", "PHE160276A", "PHE160290A", "PHE160302A", "PHE160306A", "PHE170333A", "PHE170349A", "PHE170374A", "PHE170381A", "PHE170664A", "TPA_ESBCN005", "TPA_UKBIR032")
+
+sublineage.14.upperclade.list <- c("NL14", "PHE140076A", "PHE150149A", "PHE150150A", "PHE150170A", "PHE160196A", "PHE160263A", "PHE160274A", "PHE160287A", "PHE160294A", "PHE160316A", "PHE160317A", "PHE170372A", "PHE170386A", "PHE170397A", "PHE170405A", "TPA_BCC081", "TPA_BCC088", "TPA_BCC089", "TPA_BCC101", "TPA_BCC122", "TPA_BCC126", "TPA_BCC136", "TPA_BCC169", "TPA_HUN180004", "TPA_HUN190020", "TPA_UKBIR044", "TPA_UKBRG007", "TPA_UKBRG008")
+
+# Get MRCA date for lower clade
+sublineage.14.lowerclade.list.tmrca <- sublineage.14.tree.heatmap.data[sublineage.14.tree.heatmap.data$node==getMRCA(Extract_sublineage_tree_for_plot(full.beast2.tree, TPA.meta2.1, PHE.metadata.linked, my.sublineage = 14)@phylo, sublineage.14.lowerclade.list),"x"]
+
+paste0("TMRCA for sublineage 14 lower clade: ",sublineage.14.lowerclade.list.tmrca)
+
+# Get MRCA date for upper clade
+sublineage.14.upperclade.list.tmrca <- sublineage.14.tree.heatmap.data[sublineage.14.tree.heatmap.data$node==getMRCA(Extract_sublineage_tree_for_plot(full.beast2.tree, TPA.meta2.1, PHE.metadata.linked, my.sublineage = 14)@phylo, sublineage.14.upperclade.list),"x"]
+
+paste0("TMRCA for sublineage 14 upper clade: ",sublineage.14.upperclade.list.tmrca)
+```
+\
+\
+Extract key information for sublineage 6 (two samples)
+```{r}
+sublineage.6.tree.heatmap <- plot_beast_subtree_with_PHE_metadata(plot_beast_subtree_with_HPD(Extract_sublineage_tree_for_plot(full.beast2.tree, TPA.meta2.1, PHE.metadata.linked, my.sublineage = 6), TPA.meta2.1, PHE.metadata.linked,"2019-06-01"), TPA.meta2.1, PHE.metadata.linked)
+
+sublineage.6.tree.heatmap.data <- sublineage.6.tree.heatmap$data
+
+# Get MRCA date for upper clade
+sublineage.6.beasttree.tmrca <- as.numeric(sublineage.6.tree.heatmap.data[sublineage.6.tree.heatmap.data$node==getMRCA(Extract_sublineage_tree_for_plot(full.beast2.tree, TPA.meta2.1, PHE.metadata.linked, my.sublineage = 6)@phylo, c("PHE130048A", "PHE160283A")),"branch"])
+
+
+paste0("TMRCA for sublineage 6 upper clade: ",sublineage.6.beasttree.tmrca)
+```
+
+
+
+\
+\
+### Extract sample & population statistics from datasets for use in manuscript text
+\
+Dataset and Geographical distributions
+```{r}
+# dataset counts
+paste0("Total UK samples in cleaned/deduplicated dataset: ",nrow(PHE.metadata.linked))
+paste0("Of which: ",nrow(PHE.metadata.linked[PHE.metadata.linked$is.PHE=="PHE",])," from PHE Ref lab at Colindale")
+paste0("Of which: ",nrow(PHE.metadata.linked[PHE.metadata.linked$is.PHE=="Other",])," from other labs")
+
+# proportion with geographical data
+paste0("From UK samples, ", nrow(PHE.metadata.linked[(PHE.metadata.linked$phe_centre %notin% c("Not Known","UK (not England)")),])," were grouped into one of the 9 PH regions")
+paste0("From UK samples, ", nrow(PHE.metadata.linked[PHE.metadata.linked$phe_centre=="UK (not England)",]), " were referred from outside England")
+paste0("From UK samples, ", nrow(PHE.metadata.linked[PHE.metadata.linked$phe_centre=="Not Known",]), " had unknown region")
+
+# counts & fractions by PHE region
+PHE.geo.count
+
+```
+\
+Gender Orientation stats
+```{r}
+PHE.orientation.counts
+PHE.geo.orientation.counts
+PHE.geo.HIV.counts
+PHE.sublineage.orientation.counts
+PHE.sublineage.Age
+```
+
+\
+Sublineage Distributions
+```{r}
+PHE.Lineage.count
+PHE.sublin.count
+PHE.geo.sublineage
+```
+
+\
+Macrolide resistance stats
+```{r}
+UK.macrolide.res <- PHE.metadata.linked %>%
+  dplyr::group_by(A2058G, A2059G) %>%
+  dplyr::summarise(Count.allele=n()) %>%
+  dplyr::ungroup() %>%
+  dplyr::mutate(total.count=sum(Count.allele), perc.allele=round((Count.allele/total.count)*100,1))
+UK.macrolide.res
+
+UK.macrolide.res.sublin <- PHE.metadata.linked %>%
+  dplyr::group_by(TPA.pinecone.sublineage, A2058G, A2059G) %>%
+  dplyr::summarise(Count.allele=n()) %>%
+  dplyr::ungroup() %>%
+  dplyr::group_by(TPA.pinecone.sublineage) %>%
+  dplyr::mutate(total.count=sum(Count.allele), perc.allele=round((Count.allele/total.count)*100,1))
+UK.macrolide.res.sublin
+
+
+# Calculate long form df, with different 23S alleles (A2058G, A2059G, WT, Uncertain) v.s. sublineage
+UK.macrolide.res.sublin.long <- PHE.metadata.linked %>%
+  mutate(Resistance.allele=ifelse(A2058G=="Yes", "A2058G", ifelse(A2059G=="Yes", "A2059G", ifelse((A2058G=="No" & A2059G=="No"),"Wild Type", "Uncertain")))) %>%
+  dplyr::group_by(TPA.pinecone.sublineage, Resistance.allele) %>%
+  dplyr::summarise(Count.per.sublin.Macrolides=n()) %>%
+  dplyr::mutate(total.sublin=sum(Count.per.sublin.Macrolides), 
+                fraction=Count.per.sublin.Macrolides/total.sublin) %>%
+  #dplyr::ungroup() %>%
+  dplyr::arrange((Resistance.allele), .by_group=T) %>%
+  dplyr::mutate(cum_fract = cumsum(fraction)) %>%
+  dplyr::mutate(cum_fract.mid = cum_fract-(fraction/2)) %>%
+  dplyr::mutate(Resistance.allele = factor(Resistance.allele, levels=rev(c("A2058G", "A2059G", "Uncertain", "Wild Type"))))
+
+# Make plot of macrolide resistance by sublineages
+p.sublin.Macrolides.hbarplot <- ggplot(UK.macrolide.res.sublin.long, aes(Count.per.sublin.Macrolides, y=TPA.pinecone.sublineage, fill=Resistance.allele)) +
+  geom_barh(stat="identity", position="fill", width=0.65) +
+  theme_light() +
+  scale_fill_manual(name="Macrolide\nResistance\nAllele",values=c("indianred2", "steelblue1","grey55", "grey90"), breaks=c("A2058G", "A2059G", "Uncertain", "Wild Type")) +
+  labs(y="TPA Sublineage", x="Proportion with Macrolide Resistance Allele") +
+  theme.text.size + theme(legend.key.size = unit(0.55,"line"),legend.position='bottom') +
+  guides(fill=guide_legend(ncol=2)) +
+  geom_text(data=UK.macrolide.res.sublin.long, aes(cum_fract.mid, y=TPA.pinecone.sublineage,label=Count.per.sublin.Macrolides), size=theme.text.size.within, inherit.aes = F) +
+  NULL
+
+p.sublin.Macrolides.hbarplot
+
+
+# Combine plot with sublineage count bars
+p.sublin.Macrolides.hbarplot.combi <- plot_grid(p.sublineage.hbarplot + guides(fill=guide_legend(ncol=3)), p.sublin.Macrolides.hbarplot + y.theme.strip, nrow=1, align=T, labels=c("A", "B"), label_size=panel.lab.size)
+
+p.sublin.Macrolides.hbarplot.combi
+
+#ggsave(paste0(Figure_output_directory,"SupFig9_TPA-PHE_Sublin-Macrolide-Res.",format(Sys.Date(),"%Y%m%d"),".pdf"), units='mm', width=160, height=120, device='pdf', dpi=1200)
+
+```
+\
+\
+
+### Pairwise SNP analysis
+\
+OK, want to investigate the different patterns observable for the North East of England (pale blue) in Sublineage 1
+\
+Multiple ways we can do this - including SNP distances (also multiple ways to do that)
+\
+```{r}
+###
+#Use phylogenetic distance from the SNP scaled tree
+TPA.pyjar.tree.subset.uk.cophenetic.SNP.dist <- ape::cophenetic.phylo(TPA.pyjar.tree.subset.uk)
+TPA.pyjar.tree.subset.uk.cophenetic.SNP.dist.melt <- data.frame(Taxa1=row.names(TPA.pyjar.tree.subset.uk.cophenetic.SNP.dist), TPA.pyjar.tree.subset.uk.cophenetic.SNP.dist, stringsAsFactors = F) %>% tidyr::gather(Taxa2, Distance.Phylo, -Taxa1)
+# Taxa Comparisons label
+TPA.pyjar.tree.subset.uk.cophenetic.SNP.dist.melt$Taxa_combination <- sapply(1:nrow(TPA.pyjar.tree.subset.uk.cophenetic.SNP.dist.melt), function (x) paste0(sort(c(as.character(TPA.pyjar.tree.subset.uk.cophenetic.SNP.dist.melt$Taxa1[x]),as.character(TPA.pyjar.tree.subset.uk.cophenetic.SNP.dist.melt$Taxa2[x]))),collapse="___"))
+# Merge together
+#TPA.WGS.alignment.data.dist.melt <- dplyr::left_join(TPA.WGS.alignment.data.dist.melt, TPA.pyjar.tree.subset.uk.cophenetic.SNP.dist.melt[,c("Taxa_combination","Distance.Phylo")], by="Taxa_combination")
+
+TPA.WGS.alignment.data.dist.melt <- TPA.pyjar.tree.subset.uk.cophenetic.SNP.dist.melt
+
+
+TPA.WGS.alignment.data.dist.melt <- unique(TPA.WGS.alignment.data.dist.melt)
+```
+\
+Ok, now bring in some metadata and comparisons
+```{r}
+# Bring in and merge metadata
+PHE.meta.pairwise.t1 <- PHE.metadata.linked[,c("Sample_Name","year","phe_centre","london","gender_orientation","hivpos","age_group","ukborn","TPA.pinecone.sublineage", "TPA_Lineage","Geo_Country","is.UK","is.PHE", "Sample_Year","date.decimal")]
+
+colnames(PHE.meta.pairwise.t1) <- paste0(colnames(PHE.meta.pairwise.t1),".t1")
+colnames(PHE.meta.pairwise.t1)[1] <- "Taxa1"
+PHE.meta.pairwise.t2 <- PHE.metadata.linked[,c("Sample_Name","year","phe_centre","london","gender_orientation","hivpos","age_group","ukborn","TPA.pinecone.sublineage", "TPA_Lineage","Geo_Country","is.UK","is.PHE", "Sample_Year","date.decimal")]
+colnames(PHE.meta.pairwise.t2) <- paste0(colnames(PHE.meta.pairwise.t2),".t2")
+colnames(PHE.meta.pairwise.t2)[1] <- "Taxa2"
+
+PHE.alignment.data.dist.melt.meta <- plyr::join(TPA.WGS.alignment.data.dist.melt,PHE.meta.pairwise.t1, by="Taxa1", type="left") 
+PHE.alignment.data.dist.melt.meta <- plyr::join(PHE.alignment.data.dist.melt.meta,PHE.meta.pairwise.t2, by="Taxa2", type="left")
+
+# Exclude missing data (e.g. missing sublineage) - this will also remove non-UK samples, since full metadata is missing here
+PHE.alignment.data.dist.melt.meta <- PHE.alignment.data.dist.melt.meta[!is.na(PHE.alignment.data.dist.melt.meta$TPA.pinecone.sublineage.t1),]
+PHE.alignment.data.dist.melt.meta <- PHE.alignment.data.dist.melt.meta[!is.na(PHE.alignment.data.dist.melt.meta$TPA.pinecone.sublineage.t2),]
+
+```
+
+\
+Define comparisons
+```{r}
+# Same sample
+PHE.alignment.data.dist.melt.meta$same.sample <- ifelse(PHE.alignment.data.dist.melt.meta$Taxa1==PHE.alignment.data.dist.melt.meta$Taxa2,"same", "different")
+
+# Years between samples
+PHE.alignment.data.dist.melt.meta$year.distance <- abs(as.numeric(PHE.alignment.data.dist.melt.meta$year.t1) - as.numeric(PHE.alignment.data.dist.melt.meta$year.t2))
+
+PHE.alignment.data.dist.melt.meta$Sample_Year.distance <- abs(as.numeric(PHE.alignment.data.dist.melt.meta$Sample_Year.t1) - as.numeric(PHE.alignment.data.dist.melt.meta$Sample_Year.t2))
+
+# Years between decimal date (more precise temporal distance)
+PHE.alignment.data.dist.melt.meta$decimal.date.distance <- abs(as.numeric(PHE.alignment.data.dist.melt.meta$date.decimal.t1) - as.numeric(PHE.alignment.data.dist.melt.meta$date.decimal.t2))
+
+# Epidemiological time between - catagorical
+PHE.alignment.data.dist.melt.meta$epi.time.distance.cat <- ifelse(PHE.alignment.data.dist.melt.meta$decimal.date.distance<1/12,"month", ifelse(PHE.alignment.data.dist.melt.meta$decimal.date.distance<=3/12, "quarter", ifelse(PHE.alignment.data.dist.melt.meta$decimal.date.distance<=6/12, "half year", ifelse(PHE.alignment.data.dist.melt.meta$decimal.date.distance<=1, "1 year",ifelse(PHE.alignment.data.dist.melt.meta$decimal.date.distance<=2, "2 years", ifelse(PHE.alignment.data.dist.melt.meta$decimal.date.distance<=3, "3 years", ifelse(PHE.alignment.data.dist.melt.meta$decimal.date.distance<=4, "4 years", ifelse(PHE.alignment.data.dist.melt.meta$decimal.date.distance<=5, "5 years",  ifelse(PHE.alignment.data.dist.melt.meta$decimal.date.distance<=6, "6 years",">6 years")))))))))
+
+PHE.alignment.data.dist.melt.meta$epi.time.distance.cat <- factor(PHE.alignment.data.dist.melt.meta$epi.time.distance.cat, levels=c("month", "quarter","half year","1 year", "2 years", "3 years", "4 years", "5 years", "6 years", ">6 years"))
+
+PHE.alignment.data.dist.melt.meta$epi.time.distance.cat.years <- ifelse(PHE.alignment.data.dist.melt.meta$decimal.date.distance<=1, "0", ifelse(PHE.alignment.data.dist.melt.meta$decimal.date.distance<=2, "1", ifelse(PHE.alignment.data.dist.melt.meta$decimal.date.distance<=3, "2", ifelse(PHE.alignment.data.dist.melt.meta$decimal.date.distance<=4, "3", ifelse(PHE.alignment.data.dist.melt.meta$decimal.date.distance<=5, "4",  ifelse(PHE.alignment.data.dist.melt.meta$decimal.date.distance<=6, "5",">5"))))))
+
+
+# Same country
+PHE.alignment.data.dist.melt.meta$same.country <- ifelse(PHE.alignment.data.dist.melt.meta$Geo_Country.t1 == PHE.alignment.data.dist.melt.meta$Geo_Country.t2, "same", "different")
+
+# Is UK
+PHE.alignment.data.dist.melt.meta$both.uk <- ifelse(PHE.alignment.data.dist.melt.meta$is.UK.t1 == PHE.alignment.data.dist.melt.meta$is.UK.t2, "same", "different")
+
+# Is PHE
+PHE.alignment.data.dist.melt.meta$both.PHE <- ifelse(PHE.alignment.data.dist.melt.meta$is.PHE.t1 == PHE.alignment.data.dist.melt.meta$is.PHE.t2, "same", "different")
+
+# Same TPA Lineage (cleaned up classifications)
+PHE.alignment.data.dist.melt.meta$same.TPA.Lineage <- ifelse(PHE.alignment.data.dist.melt.meta$TPA_Lineage.t1==PHE.alignment.data.dist.melt.meta$TPA_Lineage.t2, "same", "different")
+PHE.alignment.data.dist.melt.meta$same.TPA.Lineage <- sapply(1:nrow(PHE.alignment.data.dist.melt.meta), function(x) ifelse((PHE.alignment.data.dist.melt.meta$TPA_Lineage.t1[x]=="0" | PHE.alignment.data.dist.melt.meta$TPA_Lineage.t2[x]=="0"),NA,PHE.alignment.data.dist.melt.meta$same.TPA.Lineage[x]))
+
+# Same TPA sublineage
+PHE.alignment.data.dist.melt.meta$same.TPA.Pinecone.cluster <- ifelse(PHE.alignment.data.dist.melt.meta$TPA.pinecone.sublineage.t1==PHE.alignment.data.dist.melt.meta$TPA.pinecone.sublineage.t2,"same", "different")
+PHE.alignment.data.dist.melt.meta$same.TPA.Pinecone.cluster <- sapply(1:nrow(PHE.alignment.data.dist.melt.meta), function(x) ifelse(((PHE.alignment.data.dist.melt.meta$same.sample[x]=="different" & PHE.alignment.data.dist.melt.meta$TPA.pinecone.sublineage.t1[x]=="Singleton") |(PHE.alignment.data.dist.melt.meta$same.sample[x]=="different" & PHE.alignment.data.dist.melt.meta$TPA.pinecone.sublineage.t2[x]=="Singleton")),"different",PHE.alignment.data.dist.melt.meta$same.TPA.Pinecone.cluster[x]))
+
+# Define Genetic relationships hierarchically
+PHE.alignment.data.dist.melt.meta$genomic.cluster.hierarchy <- ifelse(PHE.alignment.data.dist.melt.meta$Distance==0,"Zero_SNPs", ifelse(PHE.alignment.data.dist.melt.meta$same.TPA.Pinecone.cluster=="same","Same Sublineage", ifelse(PHE.alignment.data.dist.melt.meta$same.TPA.Lineage=="same", "Same Lineage","Different Lineage")))
+
+PHE.alignment.data.dist.melt.meta$genomic.cluster.hierarchy.ph <- ifelse(PHE.alignment.data.dist.melt.meta$Distance.Phylo==0,"Zero_SNPs", ifelse(PHE.alignment.data.dist.melt.meta$same.TPA.Pinecone.cluster=="same","Same Sublineage", ifelse(PHE.alignment.data.dist.melt.meta$same.TPA.Lineage=="same", "Same Lineage","Different Lineage")))
+
+
+# Same PHE region
+PHE.alignment.data.dist.melt.meta$same.PHE.region <- ifelse(PHE.alignment.data.dist.melt.meta$phe_centre.t1==PHE.alignment.data.dist.melt.meta$phe_centre.t2, "same", "different")
+PHE.alignment.data.dist.melt.meta$PHE.centre.combination <- sapply(1:nrow(PHE.alignment.data.dist.melt.meta), function (x) paste0(sort(c(as.character(PHE.alignment.data.dist.melt.meta$phe_centre.t1[x]),as.character(PHE.alignment.data.dist.melt.meta$phe_centre.t2[x]))),collapse="___"))
+
+# does the combination included London?
+PHE.alignment.data.dist.melt.meta$involves.London <- ifelse(PHE.alignment.data.dist.melt.meta$phe_centre.t1=="London" | PHE.alignment.data.dist.melt.meta$phe_centre.t2=="London", "London", "not-London")
+
+
+# Orientation pair
+PHE.alignment.data.dist.melt.meta$Orientation_combination <- sapply(1:nrow(PHE.alignment.data.dist.melt.meta), function (x) paste0(sort(c(as.character(PHE.alignment.data.dist.melt.meta$gender_orientation.t1[x]),as.character(PHE.alignment.data.dist.melt.meta$gender_orientation.t2[x]))),collapse="___"))
+
+#PHE.alignment.data.dist.melt.meta$Orientation.Class <- sapply(1:nrow(PHE.alignment.data.dist.melt.meta), function (x) ifelse(PHE.alignment.data.dist.melt.meta$gender_orientation.t1[x]=="MSM" & PHE.alignment.data.dist.melt.meta$gender_orientation.t2[x]=="MSM", "MSM",
+#       ifelse(PHE.alignment.data.dist.melt.meta$gender_orientation.t1[x]=="MSM" | PHE.alignment.data.dist.melt.meta$gender_orientation.t2[x]=="MSM", "Mixed", 
+#              ifelse(PHE.alignment.data.dist.melt.meta$gender_orientation.t1[x]=="MSW" & PHE.alignment.data.dist.melt.meta$gender_orientation.t2[x]=="WSM","Heterosexual", 
+#                     ifelse(PHE.alignment.data.dist.melt.meta$gender_orientation.t1[x]=="WSM" & PHE.alignment.data.dist.melt.meta$gender_orientation.t2[x]=="MSW","Heterosexual","Unknown")))))
+
+PHE.alignment.data.dist.melt.meta$Orientation.Class <- sapply(1:nrow(PHE.alignment.data.dist.melt.meta), function (x) ifelse(PHE.alignment.data.dist.melt.meta$gender_orientation.t1[x]=="GBMSM" & PHE.alignment.data.dist.melt.meta$gender_orientation.t2[x]=="GBMSM", "GBMSM",
+                                                                                                                             ifelse(PHE.alignment.data.dist.melt.meta$gender_orientation.t1[x] %in% c("MSW","WSM") & PHE.alignment.data.dist.melt.meta$gender_orientation.t2[x] %in% c("MSW","WSM"),"Heterosexual",
+                                                                                                                                    ifelse(PHE.alignment.data.dist.melt.meta$gender_orientation.t1[x]=="GBMSM" & PHE.alignment.data.dist.melt.meta$gender_orientation.t2[x] %in% c("MSW","WSM"), "Mixed", 
+                                                                                                                                           ifelse(PHE.alignment.data.dist.melt.meta$gender_orientation.t1[x] %in% c("MSW","WSM") & PHE.alignment.data.dist.melt.meta$gender_orientation.t1[x]=="GBMSM", "Mixed", "Unknown")))))
+                    
+
+
+# Country Comparisons label
+PHE.alignment.data.dist.melt.meta$Country_combinations <- paste0(PHE.alignment.data.dist.melt.meta$Geo_Country.t1,"___",PHE.alignment.data.dist.melt.meta$Geo_Country.t2)
+
+# Subset to PHE data only (effectively already done, but let's be explicit)
+PHE.TPA.alignment.data.dist.melt.meta <- PHE.alignment.data.dist.melt.meta[(PHE.alignment.data.dist.melt.meta$both.uk=="same" &  PHE.alignment.data.dist.melt.meta$both.PHE=="same"),]
+PHE.TPA.alignment.data.dist.melt.meta <- PHE.TPA.alignment.data.dist.melt.meta[PHE.TPA.alignment.data.dist.melt.meta$PHE.only=="PHE",]
+
+PHE.TPA.alignment.data.dist.melt.meta <- PHE.alignment.data.dist.melt.meta[(PHE.alignment.data.dist.melt.meta$both.uk=="same"),]
+
+```
+\
+\
+
+```{r}
+# Make single sided
+PHE.TPA.alignment.data.dist.melt.meta <- PHE.TPA.alignment.data.dist.melt.meta[!duplicated(PHE.TPA.alignment.data.dist.melt.meta$Taxa_combination),]
+
+```
+
+
+\
+\
+### Perform a more detailed analysis of samples from the North East of England
+\
+Do a more detailed exploration of the North East of England
+\
+```{r, fig.height=3, fig.width=4}
+PHE.metadata.linked2.region_NorthEast <- PHE.metadata.linked[PHE.metadata.linked$phe_centre=="North East",]
+
+# Constrain by samples being from the North East
+PHE.alignment.data.dist.melt.meta.NorthEast.clusters <- PHE.alignment.data.dist.melt.meta[(PHE.alignment.data.dist.melt.meta$phe_centre.t1=="North East" & PHE.alignment.data.dist.melt.meta$same.sample=="different"),]
+
+# Constrain by the same PHE region
+PHE.alignment.data.dist.melt.meta.NorthEast.clusters <- PHE.alignment.data.dist.melt.meta.NorthEast.clusters[PHE.alignment.data.dist.melt.meta.NorthEast.clusters$same.PHE.region=="same",]
+
+#Just plot these distros
+p.NorthEast.Pairwise.SNPs.unconstrained <- ggplot(PHE.alignment.data.dist.melt.meta.NorthEast.clusters, aes(Distance.Phylo)) + 
+  geom_histogram(binwidth = 1) +
+  theme_bw() +
+  theme.text.size +
+  labs(x="Pairwise SNP Distance", y="Comparison Count")
+
+p.NorthEast.Pairwise.SNPs.unconstrained
+```
+
+\
+Make a single linkage network from the North East samples
+```{r}
+
+# Constrain by SNP distance (looser than previously - we just want to find basic groupings within sublineage 1 for NE samples)
+PHE.alignment.data.dist.melt.meta.NorthEast.clusters <- PHE.alignment.data.dist.melt.meta.NorthEast.clusters[PHE.alignment.data.dist.melt.meta.NorthEast.clusters$Distance.Phylo<=2,]
+
+# And make sure that we actually have genetic distance data for all samples within the network
+PHE.alignment.data.dist.melt.meta.NorthEast.clusters <- PHE.alignment.data.dist.melt.meta.NorthEast.clusters[!is.na(PHE.alignment.data.dist.melt.meta.NorthEast.clusters$Distance.Phylo),]
+
+# cleanup some data noise
+PHE.alignment.data.dist.melt.meta.NorthEast.clusters <- PHE.alignment.data.dist.melt.meta.NorthEast.clusters[!is.na(PHE.alignment.data.dist.melt.meta.NorthEast.clusters$year.t1),]
+
+# prepare intput data (with edge info)
+PHE.alignment.data.dist.melt.meta.NorthEast.clusters.input1 <- PHE.alignment.data.dist.melt.meta.NorthEast.clusters[,c("Taxa1","Taxa2","Distance.Phylo","decimal.date.distance","year.distance","Orientation.Class","epi.time.distance.cat")]
+
+############
+# some issues with update to R4 - double sided matrix
+PHE.alignment.data.dist.melt.meta.NorthEast.clusters.input1$edgename <- sapply(1:nrow(PHE.alignment.data.dist.melt.meta.NorthEast.clusters.input1), function(x) paste0(sort(as.character(unlist(PHE.alignment.data.dist.melt.meta.NorthEast.clusters.input1[x,c("Taxa1","Taxa2")]))),collapse="___"))
+PHE.alignment.data.dist.melt.meta.NorthEast.clusters.input1 <- PHE.alignment.data.dist.melt.meta.NorthEast.clusters.input1[!duplicated(PHE.alignment.data.dist.melt.meta.NorthEast.clusters.input1$edgename),]
+
+# Also having an issue with taxa as factors here
+PHE.alignment.data.dist.melt.meta.NorthEast.clusters.input1$Taxa1 <- as.character(PHE.alignment.data.dist.melt.meta.NorthEast.clusters.input1$Taxa1)
+PHE.alignment.data.dist.melt.meta.NorthEast.clusters.input1$Taxa2 <- as.character(PHE.alignment.data.dist.melt.meta.NorthEast.clusters.input1$Taxa2)
+############
+
+#inverse weight
+PHE.alignment.data.dist.melt.meta.NorthEast.clusters.input1$Distance.inv <- 1/PHE.alignment.data.dist.melt.meta.NorthEast.clusters.input1$Distance.Phylo
+
+# Make actual network
+set.seed(1235)
+PHE.NorthEast.network <- network(PHE.alignment.data.dist.melt.meta.NorthEast.clusters.input1, matrix.type = "edgelist", ignore.eval = FALSE, directed = F)
+
+PHE.NorthEast.network.gg <- ggnetwork(PHE.NorthEast.network, layout = "kamadakawai", weights = "Distance.inv")
+PHE.NorthEast.network.gg$Taxa1 <- PHE.NorthEast.network.gg$vertex.names
+
+# extract temporal clusters from network
+PHE.NorthEast.network.ig <- asIgraph(PHE.NorthEast.network)
+PHE.NorthEast.network.components <- data.frame(Taxa1=network.vertex.names(PHE.NorthEast.network), vertex.no=as.vector(V(PHE.NorthEast.network.ig)), cluster=igraph::components(PHE.NorthEast.network.ig)$membership)
+# For ease of story telling in the paper, flip clusters 2 and 3 around (so we can talk about 2 first)
+PHE.NorthEast.network.components <- PHE.NorthEast.network.components %>%
+  dplyr::mutate(cluster.old=cluster, cluster=ifelse(cluster.old==2, 3, ifelse(cluster.old==3,2,cluster.old)))
+PHE.NorthEast.network.components$Cluster <- paste0("Cluster",PHE.NorthEast.network.components$cluster)
+
+# merge metadata back in
+PHE.NorthEast.network.gg <- plyr::join(PHE.NorthEast.network.gg, data.frame(Taxa1=PHE.metadata.linked$Sample_Name, PHE.metadata.linked[,c("phe_centre","london","year","age_group","ukborn","gender_orientation","hivpos","TPA.pinecone.sublineage","TPA_Lineage")], stringsAsFactors = F),by="Taxa1", type="left")
+
+PHE.NorthEast.network.gg <- plyr::join(PHE.NorthEast.network.gg, data.frame(Taxa1=PHE.NorthEast.network.components$Taxa1, Cluster=PHE.NorthEast.network.components$Cluster), by="Taxa1", type="left")
+
+```
+\
+Plot network
+```{r}
+# Plot network
+p.PHE.NorthEast.network.2SNP <- ggplot(PHE.NorthEast.network.gg, aes(x = x, y = y, xend = xend, yend = yend)) + 
+  geom_edges(alpha=0.90, curvature = 0.2, aes(color=factor(Distance.Phylo), linetype=factor(Distance.Phylo))) +
+  scale_color_manual(values=c("grey5","grey55","grey85"), name="SNP\nDistance") +
+  scale_linetype(name="SNP\nDistance") +
+  theme_blank() +
+  ggnewscale::new_scale_color() + ggnewscale::new_scale("size") +
+  geom_nodelabel(aes(color=gender_orientation, label=paste(Taxa1,year,sep="\n"),fontface = "bold"), alpha=0.8, size=theme.text.size.within-0.4, label.size=0.15, label.padding = unit(0.05, "lines")) +
+  geom_nodes(size=1.0, aes(color=gender_orientation)) + 
+  scale_color_manual(name="Gender\nOrientation", values=PHE.orientation.cols$orientation.cols, breaks=PHE.orientation.cols$orientation) + 
+  theme.text.size + theme(legend.key.size = unit(0.55,"line"),legend.position='right') +
+  NULL
+p.PHE.NorthEast.network.2SNP
+
+```
+
+
+\
+Ok, so three networks. Clear differentiation of a heterosexual network (with 0-snp distances) and two predominantly MSM networks
+\
+Let's look at the phylogenetic context of those North East clusters we've defined.
+Pull out subtrees (from sublineage 1 subtree)
+\
+```{r, fig.height=12, fig.width=12}
+# Cluster 1
+Beast.tree.NE.cluster1 <- getMRCA(full.beast2.tree@phylo, PHE.NorthEast.network.components[PHE.NorthEast.network.components$Cluster=="Cluster1","Taxa1"])
+Beast.tree.NE.cluster1.subtree <- tree_subset(full.beast2.tree, node=Beast.tree.NE.cluster1, levels_back=0)
+
+p.Beast.tree.NE.cluster1.subtree <- plot_beast_subtree_with_PHE_metadata(plot_beast_subtree_with_HPD(Beast.tree.NE.cluster1.subtree, TPA.meta2.1, PHE.metadata.linked,"2019-06-01"), TPA.meta2.1, PHE.metadata.linked, initial.track.offset = 10)
+
+# Can't fit in tip labs, but since this is a polyphyletic subtree, it would be helpful to add a track to highlight the NE strains
+PHE.metadata.linked$is.NorthEast <- ifelse(PHE.metadata.linked$phe_centre=="North East","North East", "Other England")
+p.Beast.tree.NE.cluster1.subtree.cluster.highlight <- gheatmap(p.Beast.tree.NE.cluster1.subtree, data.frame(row.names=PHE.metadata.linked$Sample_Name, `North East`=PHE.metadata.linked$is.NorthEast), color=NULL,width=(1/max(p.Beast.tree.NE.cluster1.subtree$data$height)*3), offset=10+(4*5),colnames_angle=-45,colnames_offset_y=0.02, hjust=-0.0, font.size=theme.text.size.within) + 
+    scale_fill_manual(name="North East\nEngland", values=c("#A6CEE3","grey95"), breaks=c("North East","Other England"), na.value = "white", guide = guide_legend(order = 5)) +
+    ggnewscale::new_scale_fill()
+
+# Just confirm the ClusterIDs for this subtree (make sure it doesn't enclose other clusters)
+p.Beast.tree.NE.cluster1.subtree.cluster.highlight.with_clusterID <- gheatmap(p.Beast.tree.NE.cluster1.subtree.cluster.highlight, data.frame(row.names=PHE.NorthEast.network.components$Taxa1, ClusterID=PHE.NorthEast.network.components$Cluster), color=NULL,width=(1/max(p.Beast.tree.NE.cluster1.subtree$data$height)*3), offset=10+(4*6),colnames_angle=-45,colnames_offset_y=0.02, hjust=-0.0, font.size=theme.text.size.within) + 
+    scale_fill_manual(name="North East\nCluster", values=c("#7fc97f","#beaed4","#fdc086"), breaks=c("Cluster1","Cluster2","Cluster3"), na.value = "white", guide = guide_legend(order = 6)) +
+    ggnewscale::new_scale_fill()
+
+# add a bit more room to the x axis
+p.Beast.tree.NE.cluster1.subtree.cluster.highlight.x.axis.limits <- ggplot_build(p.Beast.tree.NE.cluster1.subtree.cluster.highlight.with_clusterID)$layout$panel_scales_x[[1]]$range$range
+p.Beast.tree.NE.cluster1.subtree.cluster.highlight.with_clusterID <- p.Beast.tree.NE.cluster1.subtree.cluster.highlight.with_clusterID + 
+    coord_cartesian(x=c(p.Beast.tree.NE.cluster1.subtree.cluster.highlight.x.axis.limits[1],p.Beast.tree.NE.cluster1.subtree.cluster.highlight.x.axis.limits[2]+4), y=c(-0.5-(length(unique(p.Beast.tree.NE.cluster1.subtree.cluster.highlight$data$label))/15),length(unique(p.Beast.tree.NE.cluster1.subtree.cluster.highlight$data$label))+2)) +
+  theme(legend.margin = margin(-0.5,0,0,0, unit="mm"))
+#p.Beast.tree.NE.cluster1.subtree.cluster.highlight.with_clusterID
+
+#######################
+# Cluster 2
+Beast.tree.NE.cluster2 <- getMRCA(full.beast2.tree@phylo, PHE.NorthEast.network.components[PHE.NorthEast.network.components$Cluster=="Cluster2","Taxa1"])
+Beast.tree.NE.cluster2.subtree <- tree_subset(full.beast2.tree, node=Beast.tree.NE.cluster2, levels_back=1)
+
+p.Beast.tree.NE.cluster2.subtree <- plot_beast_subtree_with_PHE_metadata(plot_beast_subtree_with_HPD(Beast.tree.NE.cluster2.subtree, TPA.meta2.1, PHE.metadata.linked,"2019-06-01"), TPA.meta2.1, PHE.metadata.linked, initial.track.offset = 20) + geom_tiplab(size=theme.text.size.within, align=T, offset=5, linesize=0.4)
+# Just add ClusterIDs for this subtree to highlight
+p.Beast.tree.NE.cluster2.subtree <- gheatmap(p.Beast.tree.NE.cluster2.subtree, data.frame(row.names=PHE.NorthEast.network.components$Taxa1, ClusterID=PHE.NorthEast.network.components$Cluster), color=NULL,width=(1/max(p.Beast.tree.NE.cluster2.subtree$data$height)*3), offset=20+(4*5),colnames_angle=-45,colnames_offset_y=0.02, hjust=-0.0, font.size=theme.text.size.within) + 
+    scale_fill_manual(name="North East\nCluster", values=c("#7fc97f","#beaed4","#fdc086"), breaks=c("Cluster1","Cluster2","Cluster3"), na.value = "white", guide = guide_legend(order = 5, ncol=2)) +
+    ggnewscale::new_scale_fill()
+# add a bit more room to the x axis
+p.Beast.tree.NE.cluster2.subtree.x.axis.limits <- ggplot_build(p.Beast.tree.NE.cluster2.subtree)$layout$panel_scales_x[[1]]$range$range
+p.Beast.tree.NE.cluster2.subtree <- p.Beast.tree.NE.cluster2.subtree + 
+    coord_cartesian(x=c(p.Beast.tree.NE.cluster2.subtree.x.axis.limits[1],p.Beast.tree.NE.cluster2.subtree.x.axis.limits[2]+12), y=c(-0.5-(length(unique(p.Beast.tree.NE.cluster2.subtree$data$label))/20)-1,length(unique(p.Beast.tree.NE.cluster2.subtree$data$label))+0.5)) + 
+  theme(legend.margin = margin(-0.5,0,0,0, unit="mm"))
+
+#p.Beast.tree.NE.cluster2.subtree
+
+############################
+# Cluster 3
+Beast.tree.NE.cluster3 <- getMRCA(full.beast2.tree@phylo, PHE.NorthEast.network.components[PHE.NorthEast.network.components$Cluster=="Cluster3","Taxa1"])
+Beast.tree.NE.cluster3.subtree <- tree_subset(full.beast2.tree, node=Beast.tree.NE.cluster3, levels_back=1)
+
+p.Beast.tree.NE.cluster3.subtree <- plot_beast_subtree_with_PHE_metadata(plot_beast_subtree_with_HPD(Beast.tree.NE.cluster3.subtree, TPA.meta2.1, PHE.metadata.linked,"2019-06-01"), TPA.meta2.1, PHE.metadata.linked, initial.track.offset = 26) + geom_tiplab(size=theme.text.size.within, align=T, offset=3, linesize=0.4)
+
+# Just add ClusterIDs for this subtree to highlight
+p.Beast.tree.NE.cluster3.subtree <- gheatmap(p.Beast.tree.NE.cluster3.subtree, data.frame(row.names=PHE.NorthEast.network.components$Taxa1, ClusterID=PHE.NorthEast.network.components$Cluster), color=NULL,width=(1/max(p.Beast.tree.NE.cluster3.subtree$data$height)*3), offset=26+(4*5),colnames_angle=-45,colnames_offset_y=0.02, hjust=-0.0, font.size=theme.text.size.within) + 
+    scale_fill_manual(name="North East\nCluster", values=c("#7fc97f","#beaed4","#fdc086"), breaks=c("Cluster1","Cluster2","Cluster3"), na.value = "white", guide = guide_legend(order = 5, ncol=2)) +
+    ggnewscale::new_scale_fill()
+
+# add a bit more room to the x axis
+p.Beast.tree.NE.cluster3.subtree.x.axis.limits <- ggplot_build(p.Beast.tree.NE.cluster3.subtree)$layout$panel_scales_x[[1]]$range$range
+p.Beast.tree.NE.cluster3.subtree <- p.Beast.tree.NE.cluster3.subtree + 
+    coord_cartesian(x=c(p.Beast.tree.NE.cluster3.subtree.x.axis.limits[1],p.Beast.tree.NE.cluster3.subtree.x.axis.limits[2]+12), y=c(-0.5-(length(unique(p.Beast.tree.NE.cluster3.subtree$data$label))/20)-1,length(unique(p.Beast.tree.NE.cluster3.subtree$data$label))+0.5)) + 
+  theme(legend.margin = margin(-0.5,0,0,0, unit="mm"))
+#p.Beast.tree.NE.cluster3.subtree
+
+#p.Beast.tree.NE.cluster1.subtree.cluster.highlight.with_clusterID
+#p.Beast.tree.NE.cluster2.subtree 
+#p.Beast.tree.NE.cluster3.subtree 
+```
+
+\
+Since Cluster 1 is really quite polyphyletic, it maybe more useful to show the clusters in context for that one
+
+```{r}
+# Add North East identifier column
+p.Beast.tree.sublineage1.NE.subtree.cluster.highlight <- gheatmap(sublineage.1.tree.heatmap, data.frame(row.names=PHE.metadata.linked$Sample_Name, `North East`=PHE.metadata.linked$is.NorthEast), color=NULL,width=(1/max(sublineage.1.tree.heatmap$data$height)*3)*1.2, offset=0+(4*5)*1.2,colnames_angle=-45,colnames_offset_y=0.02, hjust=-0.0, font.size=theme.text.size.within) + 
+    scale_fill_manual(name="North East\nEngland", values=c("#A6CEE3","grey95"), breaks=c("North East","Other England"), na.value = "white", guide = guide_legend(order = 5)) +
+    ggnewscale::new_scale_fill()
+
+# Just confirm the ClusterIDs for this subtree (make sure it doesn't enclose other clusters)
+p.Beast.tree.sublineage1.NE.subtree.cluster.highlight <- gheatmap(p.Beast.tree.sublineage1.NE.subtree.cluster.highlight, data.frame(row.names=PHE.NorthEast.network.components$Taxa1, ClusterID=PHE.NorthEast.network.components$Cluster), color=NULL,width=(1/max(p.Beast.tree.sublineage1.NE.subtree.cluster.highlight$data$height)*3)*1.2, offset=0+(4*6)*1.2,colnames_angle=-45,colnames_offset_y=0.02, hjust=-0.0, font.size=theme.text.size.within) + 
+    scale_fill_manual(name="North East\nCluster", values=c("#7fc97f","#beaed4","#fdc086"), breaks=c("Cluster1","Cluster2","Cluster3"), na.value = "white", guide = guide_legend(order = 6, ncol=2)) +
+    ggnewscale::new_scale_fill()
+
+# add a bit more room to the x axis
+p.Beast.tree.sublineage1.NE.subtree.cluster.highlight.x.axis.limits <- ggplot_build(p.Beast.tree.sublineage1.NE.subtree.cluster.highlight)$layout$panel_scales_x[[1]]$range$range
+p.Beast.tree.sublineage1.NE.subtree.cluster.highlight <- p.Beast.tree.sublineage1.NE.subtree.cluster.highlight + 
+    coord_cartesian(x=c(p.Beast.tree.sublineage1.NE.subtree.cluster.highlight.x.axis.limits[1],p.Beast.tree.sublineage1.NE.subtree.cluster.highlight.x.axis.limits[2]+4), y=c(-0.5-(length(unique(p.Beast.tree.sublineage1.NE.subtree.cluster.highlight$data$label))/15),length(unique(p.Beast.tree.sublineage1.NE.subtree.cluster.highlight$data$label))+2))
+
+# reduce spacing between legend scales
+p.Beast.tree.sublineage1.NE.subtree.cluster.highlight <- p.Beast.tree.sublineage1.NE.subtree.cluster.highlight + theme(legend.margin = margin(-0.95,0,0,0, unit="mm"))
+p.Beast.tree.sublineage1.NE.subtree.cluster.highlight
+
+```
+
+
+\ 
+Plot together
+```{r, fig.height=10, fig.width=10}
+
+p.Beast.tree.NE.subtrees.combi1 <- plot_grid(p.Beast.tree.NE.cluster2.subtree, p.Beast.tree.NE.cluster3.subtree, ncol=1, labels=c("C - Cluster 2", "D - Cluster 3"), vjust=1.0, label_size=panel.lab.size, scale=0.95)
+
+p.Beast.tree.NE.subtrees.combi2 <- plot_grid(p.Beast.tree.NE.cluster1.subtree.cluster.highlight.with_clusterID, p.Beast.tree.NE.subtrees.combi1, ncol=2, rel_widths=c(3,2), labels=c("B - Cluster 1", ""), label_size=panel.lab.size)
+p.Beast.tree.NE.subtrees.combi2
+
+
+p.Beast.tree.NE.subtrees.combi3 <- plot_grid(p.Beast.tree.sublineage1.NE.subtree.cluster.highlight, p.Beast.tree.NE.subtrees.combi1, ncol=2, rel_widths=c(8,7), labels=c("B - Sublineage 1 (All)", ""), label_size=panel.lab.size, scale=0.95, vjust=1.0)
+
+p.Beast.tree.NE.subtrees.combi3
+
+```
+
+\
+\
+Look more closely at population demographics of these clusters
+```{r}
+# Metadata on NE cluster 2
+PHE.metadata.linked %>% 
+  dplyr::filter(Sample_Name %in% Beast.tree.NE.cluster2.subtree@phylo$tip.label) %>%
+  dplyr::group_by(Geo_Country, is.NorthEast, gender_orientation) %>%
+  dplyr::summarise(Count=n())
+
+# Metadata on NE cluster 3
+PHE.metadata.linked %>% 
+  dplyr::filter(Sample_Name %in% Beast.tree.NE.cluster3.subtree@phylo$tip.label) %>%
+  dplyr::group_by(Geo_Country, is.NorthEast, gender_orientation) %>%
+  dplyr::summarise(Count=n())
+
+# Country info on NE cluster 3
+TPA.meta2.1 %>% 
+  dplyr::filter(Sample_Name %in% Beast.tree.NE.cluster3.subtree@phylo$tip.label) %>%
+  dplyr::group_by(Geo_Country) %>%
+  dplyr::summarise(Count=n())
+
+# Separate metadata records show Hungarian sample "TPA_HUN180001" came from a male bisexual (MSWM).
+```
+\
+Examine SNP scaled tree for distances
+```{r}
+
+# Extract information about SNP distances
+TPA.NEcluster3.pyjartree.mrca <- getMRCA(TPA.pyjar.tree, as.character(unlist(TPA.meta2.1[TPA.meta2.1$Sample_Name %in% Beast.tree.NE.cluster3.subtree@phylo$tip.label,"Sample_Name"])))
+
+
+TPA.NEcluster3.pyjartree.subtree <- tree_subset(TPA.pyjar.tree, node=TPA.NEcluster3.pyjartree.mrca, levels_back=1)
+
+ggtree(TPA.NEcluster3.pyjartree.subtree) + geom_tiplab(size=theme.text.size.within)
+ggtree(TPA.NEcluster3.pyjartree.subtree)$data
+```
+
+\
+\
+Do some analysis of nearest neighbour and distances to MRCAs
+```{r}
+calculate.years.from.mrca <- function(current.ggtree.phylo, current.ggtree.data){
+  #current.ggtree <- Beast.tree.NE.cluster3.subtree
+  all.tips <- current.ggtree.phylo$tip.label
+  dist.2.mrca <- NULL
+  ### put dates into df
+  current.ggtree.data$mrca.median <- 2019.5 - current.ggtree.data$height_median
+  current.ggtree.data$year <- as.numeric(round(2019.5 - current.ggtree.data$height_median,3))
+  current.ggtree.data$mrca.95high <- round(2019.5 - sapply(1:nrow(current.ggtree.data),function(x) as.numeric(unlist(current.ggtree.data[x,"height_0.95_HPD"]))[1]), 3)
+  current.ggtree.data$mrca.95low <- round(2019.5 - sapply(1:nrow(current.ggtree.data),function(x) as.numeric(unlist(current.ggtree.data[x,"height_0.95_HPD"]))[2]), 3)
+  # extract dates between sample and its MRCA using loop
+  for (current.node in all.tips) {
+    current.parent <- c(match(current.node,current.ggtree.phylo$tip.label), phangorn::Ancestors(current.ggtree.phylo, match(c(current.node), current.ggtree.phylo$tip.label), "parent"))
+    
+    current.nodelist <- current.ggtree.data[current.ggtree.data$node %in% current.parent,]
+    current.dist.2.mrca <- c(current.node, as.numeric(current.nodelist[1,"year"]-current.nodelist[2,"year"]))
+    dist.2.mrca <- rbind(dist.2.mrca, current.dist.2.mrca)
+  }
+  dist.2.mrca <- data.frame(Sample_Name=as.character(dist.2.mrca[,1]), dist.to.mrca=as.numeric(dist.2.mrca[,2]), stringsAsFactors=F)
+  return(dist.2.mrca)
+}
+
+### All samples in global tree
+dist.mrca.all.TPA <- calculate.years.from.mrca(full.beast2.tree@phylo, full.beast2.tree@data)
+
+```
+\
+Merge dist2MRCA with metadata
+```{r}
+PHE.metadata.linked.dist2mrca <- left_join(PHE.metadata.linked, dist.mrca.all.TPA, by="Sample_Name")
+
+p.time2mrca.orientation <- ggplot(PHE.metadata.linked.dist2mrca, aes(gender_orientation, dist.to.mrca, color=gender_orientation)) + 
+  geom_quasirandom(size=0.75, alpha=0.5) +
+  theme_light() + theme.text.size +
+  coord_flip() +
+  labs(x="Gender Orientation", y="Years to MRCA", color="Gender Orientation") +
+  theme(legend.position='bottom', legend.key.size = unit(0.55,"line")) +
+  scale_color_manual(name="Gender\nOrientation", values=PHE.orientation.cols$orientation.cols, breaks=PHE.orientation.cols$orientation)
+
+p.time2mrca.phe_region <- ggplot(PHE.metadata.linked.dist2mrca, aes(phe_centre, dist.to.mrca, color=phe_centre)) + 
+  geom_quasirandom(size=0.75, alpha=0.5) +
+  theme_light() + theme.text.size +
+  coord_flip(ylim=c(0,40)) +
+  labs(x="UKHSA Region", y="Years to MRCA", color="UKHSA Region") +
+  theme(legend.position='bottom', legend.key.size = unit(0.55,"line")) +
+  scale_color_manual(name="UKHSA\nRegion", values=PHE.region.cols.brew$region.col, breaks=PHE.region.cols.brew$UKHSA.region)
+
+p.time2mrca.phe_region.orientation <- ggplot(PHE.metadata.linked.dist2mrca, aes(phe_centre, dist.to.mrca, color=gender_orientation)) + 
+  geom_quasirandom(size=0.75, alpha=0.5) +
+  theme_light() + theme.text.size +
+  coord_flip(ylim=c(0,20)) +
+  labs(x="UKHSA Region", y="Years to MRCA") +
+  theme(legend.position='bottom', legend.key.size = unit(0.55,"line")) +
+  scale_color_manual(name="Gender\nOrientation", values=PHE.orientation.cols$orientation.cols, breaks=PHE.orientation.cols$orientation)
+p.time2mrca.phe_region.orientation
+
+
+p.time2mrca.sublineage <- ggplot(PHE.metadata.linked.dist2mrca, aes(TPA.pinecone.sublineage, dist.to.mrca, color=TPA.pinecone.sublineage)) + 
+  geom_quasirandom(size=0.75, alpha=0.5) +
+  theme_light() + theme.text.size +
+  coord_flip() +
+  labs(x="TPA Lineage", y="Years to MRCA", color="TPA Lineage") +
+  theme(legend.position='bottom', legend.key.size = unit(0.55,"line")) +
+  scale_color_manual(values=sublineages.cols.brew$sublineage.cols, breaks=sublineages.cols.brew$sublineage)
+p.time2mrca.sublineage
+
+
+p.time2mrca.Lineage <- ggplot(PHE.metadata.linked.dist2mrca, aes(TPA_Lineage, dist.to.mrca, color=TPA_Lineage)) + 
+  geom_quasirandom(size=0.75, alpha=0.5) +
+  theme_light() + theme.text.size +
+  coord_flip() +
+  labs(x="TPA Lineage", y="Years to MRCA (Median of Posterior)", color="TPA Lineage") +
+  theme(legend.position='bottom', legend.key.size = unit(0.55,"line")) +
+  scale_color_manual(values=TPA_Lineage.cols$Lineage.col, breaks=TPA_Lineage.cols$Lineage)
+```
+\
+\
+Maybe can make an MST of the North East samples for grapetree?
+```{r}
+TPA.pyjar.tree.subset.NorthEast <- ape::keep.tip(TPA.pyjar.tree, as.character(unlist(PHE.metadata.linked[PHE.metadata.linked$phe_centre=="North East","Sample_Name"])))
+
+#ggtree(TPA.pyjar.tree.subset.NorthEast)
+#write.tree(TPA.pyjar.tree.subset.NorthEast, paste0(Data_input_directory,"TPA.UK-only-NorthEast.pyjar.2022-02-26.tre"))
+
+# Write out a metadata sheet for the relevant information
+PHE.metadata.linked.grapetree <- PHE.metadata.linked[,c("Sample_Name", "year","gender_orientation","phe_centre","hivpos","ukborn","TPA_Lineage","TPA.pinecone.sublineage")]
+colnames(PHE.metadata.linked.grapetree)[1] <- "ID"
+
+#write.table(PHE.metadata.linked.grapetree, paste0(Data_input_directory,"TPA.UK-only.grapetree.meta.2022-02-03.tsv"), sep = "\t", quote=F, row.names = F)
+```
+
+
+Alternative approach using MST instead of networks for North East data
+```{r}
+# Read in MST
+#TPA.NorthEastEngland.Grapetree.file <- paste0(Data_input_directory,"TPA-UK-NorthEast-2022-02-26.GenderOrientation-MSTree.inkscaped.+node-counts+GBMSM.svg")
+
+p.TPA.NorthEastEngland.Grapetree <- ggdraw() + draw_image(TPA.NorthEastEngland.Grapetree.file)
+p.TPA.NorthEastEngland.Grapetree
+
+p.TPA.NorthEastEngland.Grapetree.header <- plot_grid(p.TPA.NorthEastEngland.Grapetree, labels=c("A - Network Clusters (North East England)"), label_size=panel.lab.size, scale=0.95)
+
+```
+\
+Plot with beast trees
+```{r, fig.height=12, fig.width=12}
+#p.PHE.NorthEast_MST.with.beast.subtrees.combi <- plot_grid(p.TPA.NorthEastEngland.Grapetree, p.Beast.tree.NE.subtrees.combi3, ncol=1, rel_heights=c(3,6), labels=c("A - Network Clusters (North East England)", ""), label_size=panel.lab.size, scale = 0.95)
+
+p.PHE.NorthEast_MST.with.beast.subtrees.combi <- plot_grid(p.TPA.NorthEastEngland.Grapetree.header, p.Beast.tree.NE.subtrees.combi3, ncol=1, rel_heights=c(3,7))
+
+
+
+p.PHE.NorthEast_MST.with.beast.subtrees.combi
+#ggsave(paste0(Figure_output_directory,"Fig3_Sublin1.NorthEast.MST+Beast.",format(Sys.Date(),"%Y%m%d"),".pdf"), units='mm', width=200, height=245, device='pdf', dpi=1200)
+
+
+```
+
+\
+Do some analysis of major sublineages over time by region - could this influence observations about sublineages?
+```{r, fig.height=6, fig.width=4}
+# Generate some stats by PHE Region
+PHE.major.sublineage.PHEcentre.date <- PHE.metadata.linked %>% 
+  dplyr::filter(TPA.pinecone.sublineage %in% c(1,14)) %>%
+  dplyr::group_by(TPA.pinecone.sublineage, phe_centre, year) %>%
+  dplyr::summarise(Count=n()) %>%
+  dplyr::mutate(total.sublin=sum(Count)) %>%
+  dplyr::arrange(desc(phe_centre), .by_group=T) %>%
+  dplyr::mutate(fraction=Count/total.sublin, cum_fract=cumsum(fraction), cum_fract.mid = cum_fract-(fraction/2))
+
+
+ggplot(PHE.major.sublineage.PHEcentre.date, aes(year, phe_centre, size=Count, color=TPA.pinecone.sublineage)) +
+  geom_point() + 
+  facet_grid(.~TPA.pinecone.sublineage) +
+  theme_light() +
+  theme.text.size +
+  scale_color_manual(values=sublineages.cols.brew$sublineage.cols, breaks=sublineages.cols.brew$sublineage)
+
+
+p.PHE.major.sublineage.PHEcentre.date.bubbleplot <- ggplot(PHE.major.sublineage.PHEcentre.date, aes(year, TPA.pinecone.sublineage, color=TPA.pinecone.sublineage)) +
+  geom_point(alpha=0.65, aes(size=Count)) + 
+  geom_line(alpha=0.25) +
+  facet_grid(factor(gsub("\\ ","\n",phe_centre), levels=gsub("\\ ","\n",PHE.region.cols.brew$UKHSA.region))~., switch='y') +
+  theme_light() +
+  theme(strip.placement = "outside") +
+  theme(strip.background = element_rect(color='white', fill='white',linetype="solid"), strip.text.y=element_text(color = "grey25",angle=0, size=5)) + 
+  scale_size_area(max_size = 4.5,breaks=c(1,5,10,20,30,40)) +
+  theme.text.size +
+  scale_color_manual(values=sublineages.cols.brew$sublineage.cols, breaks=sublineages.cols.brew$sublineage) + 
+  labs(y="Region", x="Year", color="Sublineage") 
+ 
+p.PHE.major.sublineage.PHEcentre.date.bubbleplot
+
+```
+\
+Do some specific analysis for the 3 Northern regions
+```{r, fig.width=4, fig.height=3}
+# Generate some stats by PHE Region
+ PHE.metadata.linked %>% 
+  dplyr::filter(phe_centre %in% c("North East", "North West", "Yorkshire and Humber")) %>%
+  dplyr::summarise(count=n())
+
+ PHE.metadata.linked %>% 
+  dplyr::filter(phe_centre %in% c("North East", "North West", "Yorkshire and Humber")) %>%
+  dplyr::group_by(year) %>%
+  dplyr::summarise(count=n())
+
+
+p.PHE.major.sublineage.3NorthernRegions <- PHE.metadata.linked %>% 
+  dplyr::filter(phe_centre %in% c("North East", "North West", "Yorkshire and Humber")) %>%
+  dplyr::group_by(TPA.pinecone.sublineage, year, phe_centre) %>%
+  dplyr::summarise(Count=n()) %>%
+  ggplot(aes(year, Count, fill=phe_centre)) + 
+  geom_bar(stat='identity', width=0.65) +
+  scale_fill_manual(values=PHE.region.cols.brew$region.col, breaks=PHE.region.cols.brew$UKHSA.region) +
+  theme_bw() + theme.text.size +
+  scale_x_continuous(breaks=seq(2012,2018,1)) +
+  scale_y_continuous(breaks=pretty) +
+  labs(title="Samples in 3 Northern Regions", x="Collection Year", y="Sample Count", fill="Public Health\nRegion") +
+  theme(legend.key.size = unit(0.55,"line"),legend.position='right') +
+  #geom_text(aes(x=year,y=Count-0.5, label=Count), color='grey95', size=theme.text.size.within) +
+  NULL
+p.PHE.major.sublineage.3NorthernRegions
+
+```
+
+
+
+\
+Single linkage network of identical genomes from UK
+
+```{r}
+# Constrain by SNP distance (identical in the asr snp tree)
+PHE.alignment.data.dist.melt.meta.identicals <- PHE.alignment.data.dist.melt.meta[PHE.alignment.data.dist.melt.meta$Distance.Phylo==0,]
+
+# and a max of 2 years
+#PHE.alignment.data.dist.melt.meta.identicals <- PHE.alignment.data.dist.melt.meta.identicals[PHE.alignment.data.dist.melt.meta.identicals$decimal.date.distance<=2,]
+
+
+# And make sure that we actually have genetic distance data for all samples within the network
+PHE.alignment.data.dist.melt.meta.identicals <- PHE.alignment.data.dist.melt.meta.identicals[!is.na(PHE.alignment.data.dist.melt.meta.identicals$Distance.Phylo),]
+
+# remove self-samples
+PHE.alignment.data.dist.melt.meta.identicals <- PHE.alignment.data.dist.melt.meta.identicals[PHE.alignment.data.dist.melt.meta.identicals$same.sample=="different",]
+
+
+# cleanup some data noise
+PHE.alignment.data.dist.melt.meta.identicals <- PHE.alignment.data.dist.melt.meta.identicals[!is.na(PHE.alignment.data.dist.melt.meta.identicals$year.t1),]
+
+# prepare intput data (with edge info)
+PHE.alignment.data.dist.melt.meta.identicals.input1 <- PHE.alignment.data.dist.melt.meta.identicals[,c("Taxa1","Taxa2","Distance.Phylo","decimal.date.distance","year.distance","Orientation.Class","epi.time.distance.cat.years","epi.time.distance.cat")]
+
+############
+# some issues with update to R4 - double sided matrix
+PHE.alignment.data.dist.melt.meta.identicals.input1$edgename <- sapply(1:nrow(PHE.alignment.data.dist.melt.meta.identicals.input1), function(x) paste0(sort(as.character(unlist(PHE.alignment.data.dist.melt.meta.identicals.input1[x,c("Taxa1","Taxa2")]))),collapse="___"))
+PHE.alignment.data.dist.melt.meta.identicals.input1 <- PHE.alignment.data.dist.melt.meta.identicals.input1[!duplicated(PHE.alignment.data.dist.melt.meta.identicals.input1$edgename),]
+
+# Also having an issue with taxa as factors here
+PHE.alignment.data.dist.melt.meta.identicals.input1$Taxa1 <- as.character(PHE.alignment.data.dist.melt.meta.identicals.input1$Taxa1)
+PHE.alignment.data.dist.melt.meta.identicals.input1$Taxa2 <- as.character(PHE.alignment.data.dist.melt.meta.identicals.input1$Taxa2)
+############
+# Deduplicate
+
+#inverse weight
+PHE.alignment.data.dist.melt.meta.identicals.input1$decimal.date.distance.inv <- 1/1/(PHE.alignment.data.dist.melt.meta.identicals.input1$decimal.date.distance+0.04)
+
+# Make actual network
+set.seed(1236)
+PHE.identicals.network <- network(PHE.alignment.data.dist.melt.meta.identicals.input1, matrix.type = "edgelist", ignore.eval = FALSE, directed = F, loops = F)
+
+#PHE.identicals.network.gg <- ggnetwork(PHE.identicals.network, layout = "kamadakawai", weights = "decimal.date.distance.inv")
+#PHE.identicals.network.gg <- ggnetwork(PHE.identicals.network, layout = "fruchtermanreingold", weights = "decimal.date.distance")
+PHE.identicals.network.gg <- ggnetwork(PHE.identicals.network, layout = "fruchtermanreingold")
+
+PHE.identicals.network.gg$Taxa1 <- PHE.identicals.network.gg$vertex.names
+
+# extract temporal clusters from network
+PHE.identicals.network.ig <- asIgraph(PHE.identicals.network)
+PHE.identicals.network.components <- data.frame(Taxa1=network.vertex.names(PHE.identicals.network), vertex.no=as.vector(V(PHE.identicals.network.ig)), cluster=igraph::components(PHE.identicals.network.ig)$membership)
+PHE.identicals.network.components$Cluster <- paste0("Cluster",PHE.identicals.network.components$cluster)
+
+# merge metadata back in
+PHE.identicals.network.gg <- plyr::join(PHE.identicals.network.gg, data.frame(Taxa1=PHE.metadata.linked$Sample_Name, PHE.metadata.linked[,c("phe_centre","london","year","age_group","ukborn","gender_orientation","hivpos","TPA.pinecone.sublineage","TPA_Lineage")], stringsAsFactors = F),by="Taxa1", type="left")
+
+PHE.identicals.network.gg <- plyr::join(PHE.identicals.network.gg, data.frame(Taxa1=PHE.identicals.network.components$Taxa1, Cluster=PHE.identicals.network.components$Cluster), by="Taxa1", type="left")
+
+
+# 
+# Add temporal colour scale
+#unique(PHE.identicals.network.gg$epi.time.distance.cat)
+
+epi.time.distance.cat.cols <- rev(colorRampPalette(brewer.pal(8, "Greys"))(length(unique(PHE.identicals.network.gg$epi.time.distance.cat))-1))
+
+
+# Plot network
+p.PHE.identicals.network.0SNP <- ggplot(PHE.identicals.network.gg, aes(x = x, y = y, xend = xend, yend = yend)) + 
+  geom_edges(alpha=0.90, curvature = 0.2, aes(color=factor(epi.time.distance.cat), linetype=factor(epi.time.distance.cat))) +
+  #scale_color_manual(values=c("grey5","grey35","grey55", "grey65", "grey75"), name="SNP\nDistance") +
+  scale_color_manual(name="Temporal\nDistance", values = epi.time.distance.cat.cols) +
+  scale_linetype(name="Temporal\nDistance") +
+  theme_blank() +
+  ggnewscale::new_scale_color() + ggnewscale::new_scale("size") +
+  #geom_nodelabel(aes(color=gender_orientation, label=paste(Taxa1,year,sep="\n"),fontface = "bold"), alpha=0.8, size=theme.text.size.within-0.4, label.size=0.15, label.padding = unit(0.05, "lines")) +
+  geom_nodes(size=2.5, aes(color=gender_orientation), alpha=0.9) + 
+  scale_color_manual(name="Gender\nOrientation", values=PHE.orientation.cols$orientation.cols, breaks=PHE.orientation.cols$orientation) + 
+  theme.text.size + theme(legend.key.size = unit(0.55,"line"),legend.position='right') +
+  NULL
+p.PHE.identicals.network.0SNP
+
+```
+
+Plot this against a UK tree?
+```{r}
+gheatmap(ggtree(TPA.pyjar.tree.subset.uk),
+data.frame(row.names=PHE.identicals.network.components$Taxa1, Cluster=PHE.identicals.network.components$Cluster))
+
+```
+
+
+
+\
+Some stats from this
+```{r}
+p.PHE.identical.Orientation_class.bydatedist <- PHE.alignment.data.dist.melt.meta %>%
+  dplyr::filter(same.sample=="different", Distance.Phylo==0) %>%
+  #filter(decimal.date.distance<=1) %>%
+  dplyr::group_by(epi.time.distance.cat, Orientation.Class) %>% 
+  dplyr::summarise(Count.class.date=n()) %>%
+  dplyr::mutate(sum.class=sum(Count.class.date), fract.class=Count.class.date/sum.class) %>%
+  ggplot(aes(x=epi.time.distance.cat, y=Count.class.date, fill=Orientation.Class)) +
+  geom_bar(stat='identity', position='stack') +
+  theme_bw() +
+  theme.text.size + theme(legend.key.size = unit(0.55,"line"),legend.position='right') +
+  labs(x="Time between samples", y="Interaction Count", fill="Orientation Type")
+p.PHE.identical.Orientation_class.bydatedist
+
+
+  
+p.PHE.identical.Orientation_class.byZerodist.cluster <- PHE.identicals.network.gg %>%
+  dplyr::filter(!is.na(Orientation.Class)) %>%
+  dplyr::group_by(Cluster, Orientation.Class) %>% 
+  dplyr::summarise(Count.class.cluster=n()) %>%
+  dplyr::mutate(sum.class=sum(Count.class.cluster), fract.class=Count.class.cluster/sum.class) %>%
+  dplyr::arrange(desc(sum.class)) %>%
+  dplyr::ungroup() %>%
+  dplyr::mutate(Cluster=as_factor(Cluster)) %>%
+  ggplot(aes(x=Cluster, y=Count.class.cluster, fill=Orientation.Class)) +
+  geom_bar(stat='identity', position='stack') + 
+  theme_bw() +
+  x.theme.axis.rotate +
+  theme.text.size + theme(legend.key.size = unit(0.55,"line"),legend.position='right') +
+  labs(x="Identical Genome Cluster", y="Interaction Count", fill="Orientation Type")
+p.PHE.identical.Orientation_class.byZerodist.cluster
+
+d.PHE.identical.GenderOrientation.byZerodist.cluster <- left_join(PHE.identicals.network.components[,c("Taxa1","Cluster")], PHE.metadata.linked[,c("Sample_Name","phe_centre","london","year","age_group","ukborn","gender_orientation","hivpos","TPA.pinecone.sublineage","TPA_Lineage")], by=c("Taxa1"="Sample_Name")) %>%
+  dplyr::group_by(TPA.pinecone.sublineage, Cluster, gender_orientation) %>%
+  dplyr::summarise(count.orient.cluster=n()) %>%
+  dplyr::mutate(count.cluster=sum(count.orient.cluster), fract=count.orient.cluster/count.cluster) %>%
+  dplyr::ungroup() %>%
+  dplyr::arrange(desc(count.cluster)) %>%
+  dplyr::mutate(Cluster.o=as_factor(Cluster))
+
+
+# Plot sample counts by genome cluster (coloured by orientation)
+p.PHE.identical.GenderOrientation.byZerodist.cluster <- d.PHE.identical.GenderOrientation.byZerodist.cluster %>%
+  ggplot(aes(Cluster.o, count.orient.cluster, fill=gender_orientation)) + 
+  geom_bar(stat="identity", width=0.65) +
+  scale_fill_manual(name="Gender\nOrientation", values=PHE.orientation.cols$orientation.cols, breaks=PHE.orientation.cols$orientation, guide = guide_legend(order = 1)) +
+  theme_light() +
+  x.theme.axis.rotate + 
+  scale_y_continuous(breaks=seq(0,45,5)) +
+  theme.text.size + theme(legend.key.size = unit(0.55,"line"),legend.position='right') +
+  labs(x="Identical Genome Cluster", y="Sample Count", fill="Patient Gender Orientation") 
+
+# Add details of sublineage  
+p.PHE.identical.GenderOrientation.byZerodist.cluster <- p.PHE.identical.GenderOrientation.byZerodist.cluster + 
+  ggnewscale::new_scale_color() +
+  geom_point(data=(d.PHE.identical.GenderOrientation.byZerodist.cluster %>% select(Cluster.o, TPA.pinecone.sublineage) %>% distinct()), aes(Cluster.o, -1.5, color=TPA.pinecone.sublineage), inherit.aes = F) + scale_color_manual(values=sublineages.cols.brew$sublineage.cols, breaks=sublineages.cols.brew$sublineage, name="Sublineage", guide = guide_legend(order = 2)) +
+  NULL
+
+# Add a sublineage axis label (bit of a hack)
+p.PHE.identical.GenderOrientation.byZerodist.cluster <- p.PHE.identical.GenderOrientation.byZerodist.cluster + 
+  geom_text(data=data.frame(lab="Sublineage", y=-1.5, x=28, stringsAsFactors=F), aes(label=lab, x=x, y=y), hjust = 0.1, size=theme.text.size.within, inherit.aes = F) +
+  coord_cartesian(x=c(1, 27), clip='off')
+  
+p.PHE.identical.GenderOrientation.byZerodist.cluster
+
+#ggsave(paste0(Figure_output_directory,"SupFig6_Identical-SNP-clust_orientation.",format(Sys.Date(),"%Y%m%d"),".pdf"), units='mm', width=120, height=100, device='pdf', dpi=1200)
+
+```
+\
+Possible to introduce some more info into that plot?
+
+
+```{r}
+d.PHE.identical.region.byZerodist.cluster <- left_join(PHE.identicals.network.components[,c("Taxa1","Cluster")], PHE.metadata.linked[,c("Sample_Name","phe_centre","london","year","age_group","ukborn","gender_orientation","hivpos","TPA.pinecone.sublineage","TPA_Lineage")], by=c("Taxa1"="Sample_Name")) %>%
+  dplyr::group_by(TPA.pinecone.sublineage, Cluster, phe_centre) %>%
+  dplyr::summarise(count.region.cluster=n()) %>%
+  dplyr::mutate(count.cluster=sum(count.region.cluster), fract=count.region.cluster/count.cluster) %>%
+  dplyr::ungroup() %>%
+  dplyr::arrange(desc(count.cluster)) %>%
+  dplyr::mutate(Cluster.o=as_factor(Cluster))
+
+
+p.PHE.identical.Region.byZerodist.cluster <- d.PHE.identical.region.byZerodist.cluster %>%
+  ggplot(aes(Cluster.o, count.region.cluster, fill=phe_centre)) + 
+  geom_bar(stat="identity", width=0.65, position='fill') +
+  scale_fill_manual(name="UKHSA\nRegion", values=PHE.region.cols.brew$region.col, breaks=PHE.region.cols.brew$UKHSA.region, guide = guide_legend(order = 1)) +
+  theme_light() +
+  x.theme.axis.rotate + 
+  scale_y_continuous(breaks=seq(0,45,5)) +
+  theme.text.size + theme(legend.key.size = unit(0.55,"line"),legend.position='right') +
+  guides(fill=guide_legend(ncol=2)) +
+  labs(x="Identical Genome Cluster", y="Region Proportion", fill="UKHSA Region") 
+
+
+```
+
+```{r, fig.height=8, fig.width=8}
+p.PHE.identical.byZerodist.cluster.barcombi <- plot_grid(p.PHE.identical.GenderOrientation.byZerodist.cluster + x.theme.strip, p.PHE.identical.Region.byZerodist.cluster, ncol=1, axis="rlt", align=T, rel_heights = c(2,1), labels=c("B","C"), label_size=panel.lab.size)
+
+#p.PHE.identical.byZerodist.cluster.barcombi
+#p.PHE.identicals.network.0SNP
+
+plot_grid(p.PHE.identicals.network.0SNP, p.PHE.identical.byZerodist.cluster.barcombi, ncol=1, rel_heights=c(2,3), labels=c("A",""), label_size=panel.lab.size)
+```
+
+
+
+```{r}
+PHE.identicals.network.gg.region.scatterpie.groups <- PHE.identicals.network.gg %>%
+  dplyr::select(Cluster, Taxa1, phe_centre) %>%
+  dplyr::distinct() %>%
+  dplyr::group_by(Cluster, phe_centre) %>% 
+  dplyr::summarise(Count.centre=n()) %>%
+  dplyr::mutate(x=Cluster, y=3.5) %>%
+  pivot_wider(names_from="phe_centre", values_from="Count.centre", values_fill=0) %>%
+  dplyr::select(Cluster,x,y,unique(PHE.identicals.network.gg$phe_centre)) %>%
+  dplyr::ungroup() %>%
+  dplyr::mutate(Cluster.numeric=as.numeric(1:27))
+  
+
+p.PHE.identical.GenderOrientation.byZerodist.cluster + 
+  ggnewscale::new_scale_fill() #+
+  
+
+```
+
+
+
+\
+Get a few more stats on the largest cluster (Cluster 8)
+```{r}
+#d.PHE.identical.GenderOrientation.byZerodist.cluster %>% filter(Cluster=="Cluster8")
+
+PHE.identicals.network.gg.identical.cluster8 <- PHE.identicals.network.gg %>% filter(Cluster=="Cluster8")  %>%
+  select(vertex.names, Orientation.Class, phe_centre, year, TPA_Lineage, TPA.pinecone.sublineage, hivpos, Cluster)
+
+sort(unique(PHE.identicals.network.gg.identical.cluster8$year))
+
+```
+
+\
+Get some more information about the heterosexual only clusters
+```{r}
+PHE.identicals.network.gg.identical_heteroclusters <- PHE.identicals.network.gg %>% filter(Cluster %in% c("Cluster12", "Cluster20", "Cluster27"))  %>%
+  select(vertex.names, Cluster, gender_orientation, phe_centre, year, TPA_Lineage, TPA.pinecone.sublineage, hivpos) %>% 
+  distinct() %>%
+  arrange(Cluster, year, gender_orientation)
+
+PHE.identicals.network.gg.identical_heteroclusters
+```
+\ 
+And do the same for the small mixed/GBMSM clusters
+```{r}
+PHE.identicals.network.gg.identical_not.heteroclusters <- PHE.identicals.network.gg %>% filter(Cluster %notin% c("Cluster12", "Cluster20", "Cluster27", "Cluster8"))  %>%
+  select(vertex.names, Cluster, gender_orientation, phe_centre, year, TPA_Lineage, TPA.pinecone.sublineage, hivpos) %>% 
+  distinct() %>%
+  arrange(Cluster, year, gender_orientation)
+PHE.identicals.network.gg.identical_not.heteroclusters
+```
+
+
+
+What proportion of heterosexuals have an identical GBMSM paired genome?
+\
+```{r}
+
+# Delineate heterosexual clusters
+d.PHE.identical.heterosexual.clusters <- d.PHE.identical.GenderOrientation.byZerodist.cluster %>% 
+  dplyr::mutate(is.heterosexual=ifelse(gender_orientation%in% c("MSW", "WSM"), "heterosexual", ifelse(gender_orientation=="GBMSM","GBMSM", "Unknown"))) %>%
+  dplyr::group_by(Cluster,is.heterosexual) %>% 
+  dplyr::mutate(count.hetero=sum(count.orient.cluster), fract.hetero=sum(count.orient.cluster)/count.cluster) %>%
+  dplyr::ungroup() %>%
+  dplyr::filter(is.heterosexual=="heterosexual") %>% 
+  dplyr::select(-c(count.orient.cluster, gender_orientation, fract)) %>%
+  dplyr::distinct() %>%
+  dplyr::mutate(cluster.type=ifelse(fract.hetero==1, "hetero.only", "other"))
+
+d.PHE.identical.heterosexual.clusters 
+
+# What proportion of heterosexuals (n=20) are in a heterosexual-only cluster?
+d.PHE.identical.heterosexual.clusters %>% 
+  dplyr::group_by(cluster.type) %>%
+  dplyr::summarise(count.in.hetero.cluster=sum(count.hetero)) %>% 
+  dplyr::mutate(fract.in.hetero=count.in.hetero.cluster/sum(count.in.hetero.cluster))
+  
+
+#left_join(PHE.identicals.network.components[,c("Taxa1","Cluster")], PHE.metadata.linked[,c("Sample_Name","phe_centre","london","year","age_group","ukborn","gender_orientation","hivpos","TPA.pinecone.sublineage","TPA_Lineage")], by=c("Taxa1"="Sample_Name"))
+```
+
+
+
+
+
