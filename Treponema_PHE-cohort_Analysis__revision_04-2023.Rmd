@@ -2404,7 +2404,7 @@ p.PHE.identical.GenderOrientation.byZerodist.cluster <- p.PHE.identical.GenderOr
   
 p.PHE.identical.GenderOrientation.byZerodist.cluster
 
-#ggsave(paste0(Figure_output_directory,"SupFig6_Identical-SNP-clust_orientation.",format(Sys.Date(),"%Y%m%d"),".pdf"), units='mm', width=120, height=100, device='pdf', dpi=1200)
+######gxxxxgsave(paste0(Figure_output_directory,"SupFig6_Identical-SNP-clust_orientation.",format(Sys.Date(),"%Y%m%d"),".pdf"), units='mm', width=120, height=100, device='pdf', dpi=1200)
 
 ```
 \
@@ -2442,6 +2442,13 @@ p.PHE.identical.byZerodist.cluster.barcombi <- plot_grid(p.PHE.identical.GenderO
 #p.PHE.identicals.network.0SNP
 
 plot_grid(p.PHE.identicals.network.0SNP, p.PHE.identical.byZerodist.cluster.barcombi, ncol=1, rel_heights=c(2,3), labels=c("A",""), label_size=panel.lab.size)
+
+
+p.PHE.identical.byZerodist.cluster.barcombi.noNet <- plot_grid(p.PHE.identical.GenderOrientation.byZerodist.cluster + x.theme.strip, p.PHE.identical.Region.byZerodist.cluster, ncol=1, axis="rlt", align=T, rel_heights = c(2,1), labels=c("A","B"), label_size=panel.lab.size)
+p.PHE.identical.byZerodist.cluster.barcombi.noNet 
+
+
+#ggsave(paste0(Figure_output_directory,"SupFig6_Identical-SNP-clust_orientation.",format(Sys.Date(),"%Y%m%d"),".pdf"), units='mm', width=120, height=120, device='pdf', dpi=1200)
 ```
 
 
@@ -2754,4 +2761,60 @@ p.sublineage6.ancestral.SNPs.dist.between.histo
 
 plot_grid(p.sublineage6.ancestral.SNPs.genomepos, p.sublineage6.ancestral.SNPs.dist.between.histo + y.theme.strip , rel_widths = c(8,1), align = T)
 ```
+\
+\
+Do some further analysis of the North East sublineage distributions. We have 35 samples collected from these regions, of which 17 were collected from 2014 onwards. Is sublineage 14 missing by chance (could we be missing it simply because we haven't collected enough samples) or is this more likely to reflect true uneven regional distributions?
+```{r}
+# How many genomes found in Northern regions before and after first detection of sublineage 14 in 2014?
+ PHE.metadata.linked %>%
+  dplyr::mutate(before2014=ifelse(year>=2014,"2014onwards", "pre2014")) %>%
+  dplyr::filter(phe_centre %in% c("North East", "North West", "Yorkshire and Humber")) %>%
+  dplyr::group_by(before2014) %>%
+  dplyr::summarise(count=n())
+
+# What are the proportions of different sublineages around the UK before and after 2014?
+PHE.meta.post2014.sublin.fracs <- PHE.metadata.linked %>% 
+  #dplyr::filter(year>=2014) %>%
+  dplyr::mutate(before2014=ifelse(year>=2014,"2014onwards", "pre2014")) %>%
+  dplyr::group_by(before2014, TPA.pinecone.sublineage) %>%
+  dplyr::summarise(Count=n()) %>%
+  dplyr::mutate(total.all=sum(Count)) %>%
+  dplyr::mutate(fraction=Count/total.all) %>%
+  dplyr::arrange(desc(TPA.pinecone.sublineage), .by_group=T) %>%
+  dplyr::mutate(cum_fract = cumsum(fraction)) %>%
+  dplyr::mutate(cum_fract.mid = cum_fract-(fraction/2)) %>%
+  dplyr::mutate(Lineage.perc=(Count/sum(Count)*100))
+PHE.meta.post2014.sublin.fracs 
+
+
+# simulating poisson process r to work out how many samples we would expect in Northern England under poisson distribution
+
+# What % of sublineage 14 samples are found in the total population?
+post2014.sublin14.freq <- PHE.meta.post2014.sublin.fracs %>% filter(before2014=="2014onwards", TPA.pinecone.sublineage==14) %>% select(Lineage.perc) %>% pull()
+ 
+
+# Simulate and plot a Poisson distribution of how many sublineage 14 samples we would expect to find if we randomly selected 17 samples at 22% 
+data.frame(rpois=rpois(1000000, 17/(100/post2014.sublin14.freq))) %>%
+  ggplot(aes(rpois)) + geom_histogram(binwidth=1) +
+  scale_x_continuous(breaks=seq(0,20,2)) +
+  theme_light() +
+  labs(x="Samples Found", y="Simulation Count")
+
+# What are the quantile distributions from that?
+quantile(rpois(1000000, 17/(100/post2014.sublin14.freq)), probs=c(0.01, 0.05, 0.5, 0.95, 0.99))
+median(rpois(1000000, 17/(100/post2014.sublin14.freq)))
+mean(rpois(1000000, 17/(100/post2014.sublin14.freq)))
+
+# What is the probability of finding no samples (assuming uniform unbiased coverage)?
+data.frame(n=seq(0,20,1), dpois=sapply(seq(0,20,1), function(x) dpois(x, lambda=17/(100/post2014.sublin14.freq)))) %>% 
+  ggplot(aes(x=n, y=dpois)) + 
+  geom_bar(stat='identity') +
+  scale_x_continuous(breaks=pretty) +
+  theme_light() +
+  labs(x="Samples Found", y="Probability")
+
+paste("Probability of finding zero samples is ", round(dpois(0, lambda=17/(100/post2014.sublin14.freq)), 5)) 
+```
+
+
 
