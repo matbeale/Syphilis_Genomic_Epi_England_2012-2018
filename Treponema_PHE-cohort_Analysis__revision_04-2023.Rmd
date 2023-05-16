@@ -13,7 +13,7 @@ Make a clean environment
 \
 Load packages
 ```{r}
-packages.list <- c("ggplot2","treeio","ggtree","ggnewscale","ape","dplyr","tidyverse","tidyr","phytools","RColorBrewer","lubridate","readxl","ggforce","ggstance","ggridges","cowplot","hexbin","scales","haven","network","ggnetwork","intergraph","igraph","ggraph","graphlayouts","scatterpie","maps","mapdata","maptools","rgdal","rgeos","broom","ggrepel","ggridges","magick","ggbeeswarm","ggrastr")
+packages.list <- c("ggplot2","treeio","ggtree","ggnewscale","ape","dplyr","tidyverse","tidyr","phytools","RColorBrewer","lubridate","readxl","ggforce","ggstance","ggridges","cowplot","hexbin","scales","haven","network","ggnetwork","intergraph","igraph","ggraph","graphlayouts","scatterpie","maps","mapdata","maptools","rgdal","rgeos","broom","ggrepel","ggridges","magick","ggbeeswarm","ggrastr", "extrafont","svglite")
 
 #"plyr","Cairo","ggmap","emojifont","rPinecone","pairsnp","CoordinateCleaner","gridExtra","dendextend","ggdendro",
 
@@ -1017,6 +1017,10 @@ Plot in combination with barplots
 plot_grid(UK.gg.scatterpie.combi, PHE.region.combiplot.2.lineages, nrow=2, rel_heights=c(4,5))
 
 #ggsave(paste0(Figure_output_directory,"Fig2_TPA-PHE_Map-Lineage+Barplots.",format(Sys.Date(),"%Y%m%d"),".pdf"), units='mm', width=190, height=185, device='pdf', dpi=1200)
+
+#ggsave(plot=plot_grid(UK.gg.scatterpie.combi, PHE.region.combiplot.2.lineages, nrow=2, rel_heights=c(4,5)), paste0(Figure_output_directory,"Fig2_TPA-PHE_Map-Lineage+Barplots.",format(Sys.Date(),"%Y%m%d"),".svg"), units='mm', width=190, height=185, device=svglite, dpi=1200)
+
+
 ```
 \
 \
@@ -1322,6 +1326,9 @@ p.sublineage.hbar.combi.plus.all.with.legends.B2F.with.grapetree <- plot_grid(p.
 
 p.sublineage.hbar.combi.plus.all.with.legends.B2F.with.grapetree
 #ggsave(paste0(Figure_output_directory, "Fig1_TPA-PHE_Sample-distros-sublineage.",format(Sys.Date(),"%Y%m%d"),".pdf"), units='mm', width=190, height=185, device='pdf', dpi=1200)
+
+#ggsave(plot=p.sublineage.hbar.combi.plus.all.with.legends.B2F.with.grapetree, paste0(Figure_output_directory, "Fig1_TPA-PHE_Sample-distros-sublineage.",format(Sys.Date(),"%Y%m%d"),".svg"), units='mm', width=190, height=185, device=svglite, dpi=1200)
+
 ```
 
 \
@@ -2171,6 +2178,8 @@ p.PHE.NorthEast_MST.with.beast.subtrees.combi <- plot_grid(p.TPA.NorthEastEnglan
 
 p.PHE.NorthEast_MST.with.beast.subtrees.combi
 #ggsave(paste0(Figure_output_directory,"Fig3_Sublin1.NorthEast.MST+Beast.",format(Sys.Date(),"%Y%m%d"),".pdf"), units='mm', width=200, height=245, device='pdf', dpi=1200)
+
+#ggsave(plot=p.PHE.NorthEast_MST.with.beast.subtrees.combi, paste0(Figure_output_directory,"Fig3_Sublin1.NorthEast.MST+Beast.",format(Sys.Date(),"%Y%m%d"),".svg"), units='mm', width=200, height=245, device=svglite, dpi=1200)
 
 
 ```
