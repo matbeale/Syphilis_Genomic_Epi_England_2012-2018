@@ -898,7 +898,14 @@ PHE.region.GPS$radius <- 0.5*(1-1/sqrt(PHE.region.GPS$Region_Count))
 UK.shapefile <- readOGR(dsn=UK.publichealth.shapefile.data)
 
 #Reshape for ggplot2 using the Broom package
-UK.mapdata <- tidy(UK.shapefile, region="phec16nm")
+#UK.mapdata <- tidy(UK.shapefile, region="phec16nm")
+UK.mapdata <- tidy(UK.shapefile)
+UK.mapdata.codes <- data.frame(st_as_sf(UK.shapefile, group="phec16nm")) %>% 
+  rownames_to_column("id") %>%
+  select(id, phec16nm)
+
+UK.mapdata <- UK.mapdata %>% left_join(UK.mapdata.codes, by='id') %>%
+  mutate(id=phec16nm)
 
 #UK.gg <- ggplot() + geom_polygon(data = UK.mapdata, aes(x = long, y = lat, group = group), color = "#FFFFFF", size = 0.25)
 UK.gg <- ggplot() + geom_polygon(data = UK.mapdata, aes(x = long, y = lat, group = group), color="grey25", fill="grey90", size = 0.075)
@@ -917,6 +924,8 @@ UK.gg <-ggplot() + ggrastr::rasterise(geom_polygon(data = UK.mapdata, aes(x = lo
 UK.mapdata.regions.meancoords <- UK.mapdata %>% dplyr::group_by(id) %>%
   dplyr::summarise(mean.lat=mean(lat), mean.long=median(long)) %>%
   dplyr::ungroup()
+
+
 colnames(UK.mapdata.regions.meancoords)[1] <- "phe_centre"
 
 PHE.region.GPS.ukmap <- dplyr::left_join(PHE.region.GPS, UK.mapdata.regions.meancoords, by="phe_centre")
@@ -1082,6 +1091,16 @@ PHE.sublineage.Age <- PHE.metadata.linked %>%
   dplyr::mutate(total.sublin=sum(Count)) %>%
   dplyr::arrange(desc(age_group), .by_group=T) %>%
   dplyr::mutate(fraction=Count/total.sublin, cum_fract=cumsum(fraction), cum_fract.mid = cum_fract-(fraction/2))
+
+# Look specifically at people >35yo and/or below
+PHE.sublineage.Age.35 <- PHE.metadata.linked %>% 
+  dplyr::mutate(over35=ifelse(age_group %in% c("35-44", "45+"), "over35", ifelse(age_group %in% c("16-24", "25-34"), "under35", "Unknown"))) %>%
+  dplyr::group_by(TPA.pinecone.sublineage, over35) %>%
+  dplyr::summarise(Count=n()) %>%
+  dplyr::mutate(total.sublin=sum(Count)) %>%
+  dplyr::arrange(desc(over35), .by_group=T) %>%
+  dplyr::mutate(fraction=Count/total.sublin, cum_fract=cumsum(fraction), cum_fract.mid = cum_fract-(fraction/2))
+
 
 # Generate some stats about HIV group
 PHE.sublineage.HIV <- PHE.metadata.linked %>% 
@@ -2388,6 +2407,7 @@ d.PHE.identical.GenderOrientation.byZerodist.cluster <- left_join(PHE.identicals
   dplyr::arrange(desc(count.cluster)) %>%
   dplyr::mutate(Cluster.o=as_factor(Cluster))
 
+d.PHE.identical.GenderOrientation.byZerodist.cluster
 
 # Plot sample counts by genome cluster (coloured by orientation)
 p.PHE.identical.GenderOrientation.byZerodist.cluster <- d.PHE.identical.GenderOrientation.byZerodist.cluster %>%
@@ -2825,5 +2845,32 @@ data.frame(n=seq(0,20,1), dpois=sapply(seq(0,20,1), function(x) dpois(x, lambda=
 paste("Probability of finding zero samples is ", round(dpois(0, lambda=17/(100/post2014.sublin14.freq)), 5)) 
 ```
 
+\
+September 2023 - Pull out some additional statistics/percentages requested by subeditor for final manuscript proofs
+```{r}
+# Counts and % of each gender
+PHE.metadata.linked %>% 
+  dplyr::mutate(Gender=ifelse(gender_orientation %in% c("GBMSM", "MUnknown", "MSW"), "Male", ifelse(gender_orientation %in% c("WSM", "WSW"), "Female", "Unknown"))) %>% 
+  dplyr::mutate(total.samples=n()) %>%
+  dplyr::group_by(Gender) %>% 
+  dplyr::summarise(Gender.Count=n(), Gender.Perc=(Gender.Count/237)*100)
+
+
+# Exact dates of sampling frame
+decimal2Date(max(PHE.metadata.linked$date.decimal)) # last sample (revise to end of month)
+decimal2Date(min(PHE.metadata.linked$date.decimal)) # first sample (revise to start of month)
+# Where did those last samples come from - are they non-PHE, and when was the last UKHSA sample?
+PHE.metadata.linked %>% 
+  select(Sample_Name, date.decimal) %>%
+  arrange(date.decimal) 
+
+
+# Counts and % of heterosexuals & GBMSM in UKHSA dataset (as opposed to combined UKHSA + prospective)
+PHE.metadata.linked %>% 
+  dplyr::filter(is.PHE=="PHE") %>%
+  dplyr::group_by(gender_orientation) %>%
+  dplyr::summarise(count=n())
+
+```
 
 
